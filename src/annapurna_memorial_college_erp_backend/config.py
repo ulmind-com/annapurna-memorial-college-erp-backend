@@ -4,11 +4,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "Annapurna Memorial College ERP"
-    COLLEGE_LEGAL_NAME: str = "Annapurna Memorial College & Sundarban Ashutosh B.Ed. College"
+    PROJECT_NAME: str = "Annapurna Memorial College of Education ERP"
+    COLLEGE_LEGAL_NAME: str = "Annapurna Memorial College of Education"
     COLLEGE_TAGLINE: str = "Excellence in Teacher Education & Higher Learning"
-    COLLEGE_CODE: str = "SABED-AMC"
-    COLLEGE_ADDRESS: str = "Kakdwip Road, Sundarban, South 24 Parganas, West Bengal 743347"
+    COLLEGE_CODE: str = "AMCE-KASHINAGAR"
+    COLLEGE_ADDRESS: str = "Kashinagar, South 24 Parganas, West Bengal 743349"
     COLLEGE_AFFILIATION: str = "Affiliated to BSAEU (WBUTTEPA) & Recognized by NCTE"
     API_V1_STR: str = "/api/v1"
     VERSION: str = "1.0.0"
