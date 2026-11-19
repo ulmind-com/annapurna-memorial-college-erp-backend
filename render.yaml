@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: annapurna-college-erp-backend
+    runtime: python
+    buildCommand: "curl -LsSf https://astral.sh/uv/install.sh | sh && export PATH=\"$HOME/.local/bin:$PATH\" && uv sync"
+    startCommand: "export PATH=\"$HOME/.local/bin:$PATH\" && uv run uvicorn annapurna_memorial_college_erp_backend.main:app --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.1
+      - key: ENVIRONMENT
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: annapurna_erp_db
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: FIREBASE_CREDENTIALS_PATH
+        sync: false
