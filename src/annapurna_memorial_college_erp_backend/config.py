@@ -50,9 +50,9 @@ class Settings(BaseSettings):
     FIREBASE_CREDENTIALS_PATH: str = ""
 
     # Superadmin Default
-    DEFAULT_ADMIN_EMAIL: str = "admin@annapurnacollege.org"
-    DEFAULT_ADMIN_PASSWORD: str = "Admin@123456"
-    DEFAULT_ADMIN_NAME: str = "Principal Arnab Senapati"
+    DEFAULT_ADMIN_EMAIL: str = "admin@annapurnacollege.edu.in"
+    DEFAULT_ADMIN_PASSWORD: str = "Admin@Amce2024#"
+    DEFAULT_ADMIN_NAME: str = "Dr. Arnab Senapati, Principal"
 
     model_config = SettingsConfigDict(
         env_file=".env",

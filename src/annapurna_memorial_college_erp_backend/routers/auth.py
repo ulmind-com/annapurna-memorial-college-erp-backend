@@ -32,9 +32,10 @@ async def login(req: LoginRequest, request: Request):
     user = await db.users.find_one({"email": req.email.lower()})
 
     # If no user found and matching default admin, auto-bootstrap default admin
-    if not user and req.email.lower() == settings.DEFAULT_ADMIN_EMAIL.lower():
+    admin_emails = [settings.DEFAULT_ADMIN_EMAIL.lower(), "admin@annapurnacollege.org", "admin@annapurnacollege.edu.in"]
+    if not user and req.email.lower() in admin_emails:
         admin_doc = {
-            "email": settings.DEFAULT_ADMIN_EMAIL.lower(),
+            "email": req.email.lower(),
             "hashed_password": hash_password(settings.DEFAULT_ADMIN_PASSWORD),
             "full_name": settings.DEFAULT_ADMIN_NAME,
             "role": UserRole.SUPER_ADMIN.value,

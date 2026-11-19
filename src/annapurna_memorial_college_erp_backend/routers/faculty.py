@@ -15,7 +15,9 @@ from annapurna_memorial_college_erp_backend.schemas.faculty import (
     FacultyResponse,
     FacultyStatus,
 )
-from annapurna_memorial_college_erp_backend.services.audit_service import audit_service
+import secrets
+import random
+from annapurna_memorial_college_erp_backend.services.email_service import email_service
 
 router = APIRouter(prefix="/faculty", tags=["Faculty & Staff"])
 
@@ -119,12 +121,13 @@ async def create_faculty(req: FacultyCreate, current_user: dict = Depends(get_cu
     res = await db.faculty.insert_one(doc)
     faculty_id = str(res.inserted_id)
 
-    # Automatically create user login if user doesn't exist
+    # Automatically generate secure random password & create user login
     user_exists = await db.users.find_one({"email": doc["email"]})
+    generated_pwd = f"Amce#{secrets.token_hex(3)}!{random.randint(10, 99)}"
     if not user_exists:
         faculty_user = {
             "email": doc["email"],
-            "hashed_password": hash_password("Faculty@123"),
+            "hashed_password": hash_password(generated_pwd),
             "full_name": doc["full_name"],
             "role": UserRole.FACULTY.value,
             "phone": doc["phone"],
@@ -134,6 +137,14 @@ async def create_faculty(req: FacultyCreate, current_user: dict = Depends(get_cu
             "created_at": datetime.now(timezone.utc),
         }
         await db.users.insert_one(faculty_user)
+
+        # Dispatch welcome email with credentials via Resend
+        await email_service.send_onboarding_credentials_email(
+            to_email=doc["email"],
+            full_name=doc["full_name"],
+            role="Faculty / Assistant Professor",
+            temporary_password=generated_pwd,
+        )
 
     await audit_service.log_action(
         action="FACULTY_ONBOARDED",
@@ -145,7 +156,7 @@ async def create_faculty(req: FacultyCreate, current_user: dict = Depends(get_cu
         details={"employee_id": req.employee_id, "department": req.department},
     )
 
-    return {"id": faculty_id, **doc}
+    return {"id": faculty_id, **doc, "generated_password": generated_pwd if not user_exists else None}
 
 
 @router.put("/{faculty_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])

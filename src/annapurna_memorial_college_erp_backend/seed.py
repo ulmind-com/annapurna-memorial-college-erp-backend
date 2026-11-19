@@ -178,7 +178,7 @@ async def seed_all(force: bool = False):
         if not u_exists:
             user_doc = {
                 "email": f["email"],
-                "hashed_password": hash_password("Faculty@123"),
+                "hashed_password": hash_password("Teacher@Amce2024#"),
                 "full_name": f["full_name"],
                 "role": UserRole.FACULTY.value,
                 "phone": f["phone"],
@@ -423,7 +423,7 @@ async def seed_all(force: bool = False):
         if not u_exists:
             user_doc = {
                 "email": s["email"],
-                "hashed_password": hash_password("Student@123"),
+                "hashed_password": hash_password("Student@Amce2024#"),
                 "full_name": s["full_name"],
                 "role": UserRole.STUDENT.value,
                 "phone": s["phone"],

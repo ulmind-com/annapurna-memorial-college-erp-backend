@@ -64,6 +64,46 @@ class EmailService:
         """
         return await self.send_email([to_email], subject, html)
 
+    async def send_onboarding_credentials_email(
+        self,
+        to_email: str,
+        full_name: str,
+        role: str,
+        temporary_password: str,
+    ) -> bool:
+        subject = f"Official ERP Portal Access Credentials - {settings.COLLEGE_LEGAL_NAME}"
+        login_url = "https://annapurna-memorial-college-erp-adml.vercel.app"
+        html = f"""
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+            <div style="text-align: center; margin-bottom: 24px; border-bottom: 2px solid #3b82f6; padding-bottom: 16px;">
+                <h2 style="color: #1e3a8a; margin: 0; font-size: 20px;">{settings.COLLEGE_LEGAL_NAME}</h2>
+                <p style="color: #64748b; font-size: 12px; margin: 4px 0 0 0;">Kashinagar, South 24 Parganas • Recognized by NCTE • Affiliated to BSAEU</p>
+            </div>
+            <h3 style="color: #0f172a; margin-top: 0;">Welcome, {full_name}!</h3>
+            <p style="color: #334155; font-size: 14px; line-height: 1.6;">
+                An official institutional user account has been created for you on the Annapurna Memorial College ERP Portal with the role of <strong>{role}</strong>.
+            </p>
+            <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 16px; margin: 20px 0;">
+                <p style="margin: 0 0 8px 0; font-size: 13px; color: #475569;"><strong>Portal Login URL:</strong> <a href="{login_url}" style="color: #2563eb;">{login_url}</a></p>
+                <p style="margin: 0 0 8px 0; font-size: 13px; color: #475569;"><strong>Official Email:</strong> <span style="font-family: monospace; color: #0f172a;">{to_email}</span></p>
+                <p style="margin: 0; font-size: 13px; color: #475569;"><strong>Temporary Access Password:</strong> <span style="font-family: monospace; font-weight: bold; background: #e0e7ff; color: #1e40af; padding: 2px 6px; border-radius: 4px;">{temporary_password}</span></p>
+            </div>
+            <p style="color: #ef4444; font-size: 12px; font-weight: 600;">
+                * Important: Please change your password immediately upon your first login from the profile settings.
+            </p>
+            <div style="margin-top: 24px; text-align: center;">
+                <a href="{login_url}" style="background-color: #2563eb; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
+                    Access ERP Portal
+                </a>
+            </div>
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0 16px 0;" />
+            <p style="color: #94a3b8; font-size: 11px; text-align: center; margin: 0;">
+                This is an automated administrative notification from {settings.COLLEGE_LEGAL_NAME} ERP Systems.
+            </p>
+        </div>
+        """
+        return await self.send_email([to_email], subject, html)
+
     async def send_marksheet_publication_notice(self, to_email: str, student_name: str, exam_title: str) -> bool:
         subject = f"Official Marksheet Published: {exam_title}"
         html = f"""

@@ -15,8 +15,11 @@ from annapurna_memorial_college_erp_backend.schemas.student import (
     StudentResponse,
     StudentStatus,
 )
+import secrets
+import random
 from annapurna_memorial_college_erp_backend.services.storage_service import storage_service
 from annapurna_memorial_college_erp_backend.services.audit_service import audit_service
+from annapurna_memorial_college_erp_backend.services.email_service import email_service
 
 router = APIRouter(prefix="/students", tags=["Students & Admissions"])
 
@@ -149,12 +152,13 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
     res = await db.students.insert_one(doc)
     student_id = str(res.inserted_id)
 
-    # Automatically create student portal login account if user does not exist
+    # Automatically generate secure random password & create student portal login account
     user_exists = await db.users.find_one({"email": doc["email"]})
+    generated_pwd = f"Amce#{secrets.token_hex(3)}!{random.randint(10, 99)}"
     if not user_exists:
         student_user = {
             "email": doc["email"],
-            "hashed_password": hash_password("Student@123"),  # Initial password
+            "hashed_password": hash_password(generated_pwd),
             "full_name": doc["full_name"],
             "role": UserRole.STUDENT.value,
             "phone": doc["phone"],
@@ -164,6 +168,14 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
             "created_at": datetime.now(timezone.utc),
         }
         await db.users.insert_one(student_user)
+
+        # Dispatch welcome email with credentials via Resend
+        await email_service.send_onboarding_credentials_email(
+            to_email=doc["email"],
+            full_name=doc["full_name"],
+            role="Teacher Trainee (Student)",
+            temporary_password=generated_pwd,
+        )
 
     await audit_service.log_action(
         action="STUDENT_ENROLLED",
@@ -175,7 +187,7 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
         details={"roll_number": req.roll_number, "course": req.course_code},
     )
 
-    return {"id": student_id, **doc}
+    return {"id": student_id, **doc, "generated_password": generated_pwd if not user_exists else None}
 
 
 @router.put("/{student_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
