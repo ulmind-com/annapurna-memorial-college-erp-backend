@@ -16,7 +16,8 @@ from annapurna_memorial_college_erp_backend.routers import (
     academics,
     attendance,
     examinations,
-    fees,
+    leaves,
+    feedback,
     notices,
     notifications,
     study_materials,
@@ -81,7 +82,8 @@ app.include_router(faculty.router, prefix=settings.API_V1_STR)
 app.include_router(academics.router, prefix=settings.API_V1_STR)
 app.include_router(attendance.router, prefix=settings.API_V1_STR)
 app.include_router(examinations.router, prefix=settings.API_V1_STR)
-app.include_router(fees.router, prefix=settings.API_V1_STR)
+app.include_router(leaves.router, prefix=settings.API_V1_STR)
+app.include_router(feedback.router, prefix=settings.API_V1_STR)
 app.include_router(notices.router, prefix=settings.API_V1_STR)
 app.include_router(notifications.router, prefix=settings.API_V1_STR)
 app.include_router(study_materials.router, prefix=settings.API_V1_STR)
