@@ -83,6 +83,10 @@ class DatabaseManager:
             await cls.db.notices.create_index([("created_at", -1)])
             await cls.db.notices.create_index("target_audience")
 
+            # Mobile Device Tokens
+            await cls.db.device_tokens.create_index("fcm_token", unique=True)
+            await cls.db.device_tokens.create_index("user_id")
+
             # Audit Logs
             await cls.db.audit_logs.create_index([("timestamp", -1)])
 
