@@ -58,6 +58,7 @@ async def create_fee_structure(req: FeeStructureCreate, current_user: dict = Dep
     doc = req.model_dump()
     doc["created_at"] = datetime.now(timezone.utc)
     res = await db.fee_structures.insert_one(doc)
+    doc.pop("_id", None)
     return {"id": str(res.inserted_id), **doc}
 
 

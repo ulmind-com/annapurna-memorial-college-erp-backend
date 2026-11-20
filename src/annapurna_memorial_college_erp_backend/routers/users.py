@@ -97,6 +97,7 @@ async def create_user(req: UserCreate, current_user: dict = Depends(get_current_
         details={"created_email": req.email, "role": req.role.value},
     )
 
+    user_doc.pop("_id", None)
     return {
         "id": new_id,
         **user_doc,

@@ -73,6 +73,7 @@ async def apply_leave(data: LeaveCreate):
 
     result = await db.leaves.insert_one(doc)
     doc["id"] = str(result.inserted_id)
+    doc.pop("_id", None)
     return doc
 
 

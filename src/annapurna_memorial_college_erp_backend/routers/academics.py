@@ -172,4 +172,5 @@ async def create_session(req: AcademicSessionCreate):
 
     doc = req.model_dump()
     res = await db.academic_sessions.insert_one(doc)
+    doc.pop("_id", None)
     return {"id": str(res.inserted_id), **doc}

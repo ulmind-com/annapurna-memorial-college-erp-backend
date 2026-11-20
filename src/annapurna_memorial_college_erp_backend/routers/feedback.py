@@ -72,6 +72,7 @@ async def submit_feedback(data: FeedbackCreate):
 
     result = await db.feedback.insert_one(doc)
     doc["id"] = str(result.inserted_id)
+    doc.pop("_id", None)
     return doc
 
 

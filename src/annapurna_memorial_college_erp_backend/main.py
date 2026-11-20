@@ -1,6 +1,8 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -33,12 +35,28 @@ logging.basicConfig(
 logger = logging.getLogger("erp.main")
 
 
+async def keep_alive_worker():
+    """Periodically ping self public endpoint every 9 minutes so Render free instances never sleep."""
+    await asyncio.sleep(45)
+    while True:
+        try:
+            url = "https://annapurna-memorial-college-erp-adminpanel.onrender.com/health"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(url)
+                logger.info(f"Keep-alive self-ping: status {res.status_code}")
+        except Exception as e:
+            logger.debug(f"Keep-alive ping exception: {e}")
+        await asyncio.sleep(540)  # 9 minutes (< 15 min Render idle timeout)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Starting {settings.PROJECT_NAME} v{settings.VERSION}...")
     await DatabaseManager.connect_to_mongo()
+    ping_task = asyncio.create_task(keep_alive_worker())
     yield
     logger.info("Shutting down ERP backend...")
+    ping_task.cancel()
     await DatabaseManager.close_mongo_connection()
 
 

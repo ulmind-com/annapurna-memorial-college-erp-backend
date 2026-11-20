@@ -110,6 +110,7 @@ async def create_notice(req: NoticeCreate, current_user: dict = Depends(get_curr
         details={"title": req.title, "audience": doc["target_audience"]},
     )
 
+    doc.pop("_id", None)
     return {"id": notice_id, **doc}
 
 
