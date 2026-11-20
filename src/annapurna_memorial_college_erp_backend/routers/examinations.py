@@ -82,6 +82,7 @@ async def create_examination(req: ExaminationCreate, current_user: dict = Depend
         details={"code": req.code, "title": req.title},
     )
 
+    doc.pop("_id", None)
     return {"id": str(res.inserted_id), **doc}
 
 
