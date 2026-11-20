@@ -97,6 +97,7 @@ async def upload_study_material(
     }
 
     res = await db.study_materials.insert_one(doc)
+    doc.pop("_id", None)
     return {"id": str(res.inserted_id), **doc}
 
 

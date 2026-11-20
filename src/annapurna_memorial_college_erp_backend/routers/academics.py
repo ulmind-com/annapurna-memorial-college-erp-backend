@@ -57,6 +57,7 @@ async def create_course(req: CourseCreate):
     doc["code"] = doc["code"].upper()
     doc["created_at"] = datetime.now(timezone.utc)
     res = await db.courses.insert_one(doc)
+    doc.pop("_id", None)
     return {"id": str(res.inserted_id), **doc}
 
 
@@ -126,6 +127,7 @@ async def create_subject(req: SubjectCreate):
 
     doc["created_at"] = datetime.now(timezone.utc)
     res = await db.subjects.insert_one(doc)
+    doc.pop("_id", None)
     return {"id": str(res.inserted_id), **doc}
 
 

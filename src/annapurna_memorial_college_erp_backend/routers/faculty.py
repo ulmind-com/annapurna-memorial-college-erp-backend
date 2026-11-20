@@ -176,6 +176,7 @@ async def create_faculty(req: FacultyCreate, current_user: dict = Depends(get_cu
         details={"employee_id": req.employee_id, "department": req.department},
     )
 
+    doc.pop("_id", None)
     return {"id": faculty_id, **doc, "generated_password": generated_pwd}
 
 

@@ -147,6 +147,8 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
     doc["email"] = doc["email"].lower()
     doc["status"] = doc["status"].value if hasattr(doc["status"], "value") else doc["status"]
     doc["gender"] = doc["gender"].value if hasattr(doc["gender"], "value") else doc["gender"]
+    if not doc.get("registration_number"):
+        doc.pop("registration_number", None)
     if not doc.get("avatar_url"):
         doc["avatar_url"] = f"https://api.dicebear.com/7.x/adventurer/svg?seed={req.roll_number}"
     doc["documents"] = []
@@ -206,6 +208,7 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
         details={"roll_number": req.roll_number, "course": req.course_code},
     )
 
+    doc.pop("_id", None)
     return {"id": student_id, **doc, "generated_password": generated_pwd}
 
 

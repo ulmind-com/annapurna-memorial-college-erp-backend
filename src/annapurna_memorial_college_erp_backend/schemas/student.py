@@ -24,16 +24,16 @@ class StudentBase(BaseModel):
     email: EmailStr
     phone: str
     course_code: str
-    course_name: str
-    academic_session: str
+    course_name: Optional[str] = "Teacher Education Program"
+    academic_session: Optional[str] = "2024-2026"
     semester: int = 1
     section: str = "A"
     date_of_birth: Optional[str] = None
     gender: Gender = Gender.MALE
     blood_group: Optional[str] = None
     category: str = "GEN"
-    guardian_name: str
-    guardian_phone: str
+    guardian_name: Optional[str] = "Guardian"
+    guardian_phone: Optional[str] = "+91 9999999999"
     guardian_relation: str = "Father"
     address: Optional[str] = None
     status: StudentStatus = StudentStatus.ACTIVE
