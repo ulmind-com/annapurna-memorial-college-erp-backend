@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 from typing import Optional, List
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, status
@@ -20,6 +21,8 @@ import random
 from annapurna_memorial_college_erp_backend.services.storage_service import storage_service
 from annapurna_memorial_college_erp_backend.services.audit_service import audit_service
 from annapurna_memorial_college_erp_backend.services.email_service import email_service
+
+logger = logging.getLogger("erp.students")
 
 router = APIRouter(prefix="/students", tags=["Students & Admissions"])
 
@@ -152,7 +155,7 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
     res = await db.students.insert_one(doc)
     student_id = str(res.inserted_id)
 
-    # Automatically generate secure random password & create student portal login account
+    # Automatically generate secure random password & create/update student portal login account
     user_exists = await db.users.find_one({"email": doc["email"]})
     generated_pwd = f"Amce#{secrets.token_hex(3)}!{random.randint(10, 99)}"
     if not user_exists:
@@ -168,14 +171,30 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
             "created_at": datetime.now(timezone.utc),
         }
         await db.users.insert_one(student_user)
+    else:
+        await db.users.update_one(
+            {"_id": user_exists["_id"]},
+            {
+                "$set": {
+                    "hashed_password": hash_password(generated_pwd),
+                    "full_name": doc["full_name"],
+                    "role": UserRole.STUDENT.value,
+                    "entity_id": student_id,
+                    "is_active": True,
+                }
+            },
+        )
 
-        # Dispatch welcome email with credentials via Resend
+    # Always dispatch welcome email with credentials via Resend
+    try:
         await email_service.send_onboarding_credentials_email(
             to_email=doc["email"],
             full_name=doc["full_name"],
             role="Teacher Trainee (Student)",
             temporary_password=generated_pwd,
         )
+    except Exception as e:
+        logger.warning(f"Failed to dispatch student email: {e}")
 
     await audit_service.log_action(
         action="STUDENT_ENROLLED",
@@ -187,7 +206,56 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
         details={"roll_number": req.roll_number, "course": req.course_code},
     )
 
-    return {"id": student_id, **doc, "generated_password": generated_pwd if not user_exists else None}
+    return {"id": student_id, **doc, "generated_password": generated_pwd}
+
+
+@router.post("/{student_id}/resend-credentials", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
+async def resend_student_credentials(student_id: str, current_user: dict = Depends(get_current_user)):
+    db = await get_db()
+    student = await db.students.find_one({"_id": ObjectId(student_id)})
+    if not student:
+        raise HTTPException(status_code=404, detail="Student record not found.")
+
+    email = student["email"].lower()
+    full_name = student["full_name"]
+    generated_pwd = f"Amce#{secrets.token_hex(3)}!{random.randint(10, 99)}"
+
+    user_exists = await db.users.find_one({"email": email})
+    if user_exists:
+        await db.users.update_one(
+            {"_id": user_exists["_id"]},
+            {
+                "$set": {
+                    "hashed_password": hash_password(generated_pwd),
+                    "is_active": True,
+                }
+            },
+        )
+    else:
+        await db.users.insert_one({
+            "email": email,
+            "hashed_password": hash_password(generated_pwd),
+            "full_name": full_name,
+            "role": UserRole.STUDENT.value,
+            "phone": student.get("phone", ""),
+            "entity_id": student_id,
+            "is_active": True,
+            "avatar_url": student.get("avatar_url", ""),
+            "created_at": datetime.now(timezone.utc),
+        })
+
+    await email_service.send_onboarding_credentials_email(
+        to_email=email,
+        full_name=full_name,
+        role="Teacher Trainee (Student)",
+        temporary_password=generated_pwd,
+    )
+
+    return {
+        "message": f"Login credentials successfully dispatched to {email}",
+        "email": email,
+        "generated_password": generated_pwd,
+    }
 
 
 @router.put("/{student_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])

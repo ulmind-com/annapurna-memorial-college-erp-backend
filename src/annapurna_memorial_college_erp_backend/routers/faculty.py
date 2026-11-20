@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 from typing import Optional, List
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -18,6 +19,9 @@ from annapurna_memorial_college_erp_backend.schemas.faculty import (
 import secrets
 import random
 from annapurna_memorial_college_erp_backend.services.email_service import email_service
+from annapurna_memorial_college_erp_backend.services.audit_service import audit_service
+
+logger = logging.getLogger("erp.faculty")
 
 router = APIRouter(prefix="/faculty", tags=["Faculty & Staff"])
 
@@ -121,7 +125,7 @@ async def create_faculty(req: FacultyCreate, current_user: dict = Depends(get_cu
     res = await db.faculty.insert_one(doc)
     faculty_id = str(res.inserted_id)
 
-    # Automatically generate secure random password & create user login
+    # Automatically generate secure random password & create/update user login
     user_exists = await db.users.find_one({"email": doc["email"]})
     generated_pwd = f"Amce#{secrets.token_hex(3)}!{random.randint(10, 99)}"
     if not user_exists:
@@ -137,14 +141,30 @@ async def create_faculty(req: FacultyCreate, current_user: dict = Depends(get_cu
             "created_at": datetime.now(timezone.utc),
         }
         await db.users.insert_one(faculty_user)
+    else:
+        await db.users.update_one(
+            {"_id": user_exists["_id"]},
+            {
+                "$set": {
+                    "hashed_password": hash_password(generated_pwd),
+                    "full_name": doc["full_name"],
+                    "role": UserRole.FACULTY.value,
+                    "entity_id": faculty_id,
+                    "is_active": True,
+                }
+            },
+        )
 
-        # Dispatch welcome email with credentials via Resend
+    # Always dispatch welcome email with credentials via Resend
+    try:
         await email_service.send_onboarding_credentials_email(
             to_email=doc["email"],
             full_name=doc["full_name"],
             role="Faculty / Assistant Professor",
             temporary_password=generated_pwd,
         )
+    except Exception as e:
+        logger.warning(f"Failed to dispatch faculty email: {e}")
 
     await audit_service.log_action(
         action="FACULTY_ONBOARDED",
@@ -156,7 +176,56 @@ async def create_faculty(req: FacultyCreate, current_user: dict = Depends(get_cu
         details={"employee_id": req.employee_id, "department": req.department},
     )
 
-    return {"id": faculty_id, **doc, "generated_password": generated_pwd if not user_exists else None}
+    return {"id": faculty_id, **doc, "generated_password": generated_pwd}
+
+
+@router.post("/{faculty_id}/resend-credentials", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
+async def resend_faculty_credentials(faculty_id: str, current_user: dict = Depends(get_current_user)):
+    db = await get_db()
+    faculty_rec = await db.faculty.find_one({"_id": ObjectId(faculty_id)})
+    if not faculty_rec:
+        raise HTTPException(status_code=404, detail="Faculty record not found.")
+
+    email = faculty_rec["email"].lower()
+    full_name = faculty_rec["full_name"]
+    generated_pwd = f"Amce#{secrets.token_hex(3)}!{random.randint(10, 99)}"
+
+    user_exists = await db.users.find_one({"email": email})
+    if user_exists:
+        await db.users.update_one(
+            {"_id": user_exists["_id"]},
+            {
+                "$set": {
+                    "hashed_password": hash_password(generated_pwd),
+                    "is_active": True,
+                }
+            },
+        )
+    else:
+        await db.users.insert_one({
+            "email": email,
+            "hashed_password": hash_password(generated_pwd),
+            "full_name": full_name,
+            "role": UserRole.FACULTY.value,
+            "phone": faculty_rec.get("phone", ""),
+            "entity_id": faculty_id,
+            "is_active": True,
+            "avatar_url": faculty_rec.get("avatar_url", ""),
+            "created_at": datetime.now(timezone.utc),
+        })
+
+    await email_service.send_onboarding_credentials_email(
+        to_email=email,
+        full_name=full_name,
+        role="Faculty / Assistant Professor",
+        temporary_password=generated_pwd,
+    )
+
+    return {
+        "message": f"Login credentials successfully dispatched to {email}",
+        "email": email,
+        "generated_password": generated_pwd,
+    }
 
 
 @router.put("/{faculty_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])

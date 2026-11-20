@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import List, Optional
 from annapurna_memorial_college_erp_backend.config import settings
 
@@ -8,6 +9,9 @@ logger = logging.getLogger("erp.email")
 class EmailService:
     def __init__(self):
         self.resend_configured = False
+        self._init_resend()
+
+    def _init_resend(self):
         if settings.RESEND_API_KEY:
             try:
                 import resend
@@ -24,6 +28,9 @@ class EmailService:
         html_content: str,
         text_content: Optional[str] = None
     ) -> bool:
+        if not self.resend_configured and settings.RESEND_API_KEY:
+            self._init_resend()
+
         if self.resend_configured:
             try:
                 import resend
@@ -72,7 +79,7 @@ class EmailService:
         temporary_password: str,
     ) -> bool:
         subject = f"Official ERP Portal Access Credentials - {settings.COLLEGE_LEGAL_NAME}"
-        login_url = "https://annapurna-memorial-college-erp-adml.vercel.app"
+        login_url = os.getenv("FRONTEND_URL", "https://annapurna-memorial-college-erp-adminpanel.vercel.app")
         html = f"""
         <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
             <div style="text-align: center; margin-bottom: 24px; border-bottom: 2px solid #3b82f6; padding-bottom: 16px;">
