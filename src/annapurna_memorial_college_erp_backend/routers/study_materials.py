@@ -18,6 +18,9 @@ async def list_study_materials(
     course_code: Optional[str] = None,
     semester: Optional[int] = None,
     subject_code: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
     current_user: dict = Depends(get_current_user),
 ):
     db = await get_db()
@@ -28,8 +31,14 @@ async def list_study_materials(
         query["semester"] = semester
     if subject_code:
         query["subject_code"] = subject_code
+    if search:
+        query["$or"] = [
+            {"title": {"$regex": search, "$options": "i"}},
+            {"description": {"$regex": search, "$options": "i"}},
+            {"tags": {"$regex": search, "$options": "i"}},
+        ]
 
-    cursor = db.study_materials.find(query).sort("created_at", -1)
+    cursor = db.study_materials.find(query).skip((page - 1) * limit).limit(limit).sort("created_at", -1)
     materials = []
     async for m in cursor:
         materials.append({

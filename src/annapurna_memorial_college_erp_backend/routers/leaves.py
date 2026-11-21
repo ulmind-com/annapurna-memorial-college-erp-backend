@@ -47,13 +47,20 @@ class LeaveResponse(BaseModel):
 
 
 @router.get("", response_model=List[LeaveResponse])
-async def get_leaves(student_id: Optional[str] = None):
+async def get_leaves(
+    student_id: Optional[str] = None,
+    status: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+):
     db = DatabaseManager.get_database()
     query = {}
     if student_id:
         query["$or"] = [{"student_id": student_id}, {"roll_number": student_id}]
+    if status and status != "ALL":
+        query["status"] = status
 
-    cursor = db.leaves.find(query).sort("applied_at", -1)
+    cursor = db.leaves.find(query).skip((page - 1) * limit).limit(limit).sort("applied_at", -1)
     results = []
     async for doc in cursor:
         doc["id"] = str(doc.get("_id", doc.get("id", "")))

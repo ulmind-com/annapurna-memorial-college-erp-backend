@@ -26,12 +26,20 @@ router = APIRouter(prefix="/notices", tags=["Notices & Circulars"])
 async def list_notices(
     category: Optional[NoticeCategory] = None,
     target_audience: Optional[TargetAudience] = None,
+    search: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
     current_user: dict = Depends(get_current_user),
 ):
     db = await get_db()
     query = {}
     if category:
         query["category"] = category.value
+    if search:
+        query["$or"] = [
+            {"title": {"$regex": search, "$options": "i"}},
+            {"content": {"$regex": search, "$options": "i"}},
+        ]
 
     user_role = current_user.get("role", "STUDENT")
     if target_audience:
@@ -41,7 +49,7 @@ async def list_notices(
     elif user_role == UserRole.FACULTY.value:
         query["target_audience"] = {"$in": ["ALL", "FACULTY"]}
 
-    cursor = db.notices.find(query).sort([("is_pinned", -1), ("created_at", -1)])
+    cursor = db.notices.find(query).skip((page - 1) * limit).limit(limit).sort([("is_pinned", -1), ("created_at", -1)])
     notices = []
     async for n in cursor:
         notices.append({

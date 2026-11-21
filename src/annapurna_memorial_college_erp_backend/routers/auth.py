@@ -25,17 +25,55 @@ from annapurna_memorial_college_erp_backend.services.audit_service import audit_
 
 router = APIRouter(prefix="/auth", tags=["Authentication & Security"])
 
+# In-memory sliding-window brute force protection: {key: [timestamp, timestamp, ...]}
+FAILED_ATTEMPTS: dict[str, list[datetime]] = {}
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_MINUTES = 5
+
+
+def check_brute_force(key: str):
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=LOCKOUT_MINUTES)
+    attempts = [t for t in FAILED_ATTEMPTS.get(key, []) if t > cutoff]
+    FAILED_ATTEMPTS[key] = attempts
+    if len(attempts) >= MAX_FAILED_ATTEMPTS:
+        first_attempt = attempts[0]
+        remaining_seconds = int((first_attempt + timedelta(minutes=LOCKOUT_MINUTES) - now).total_seconds())
+        remaining_seconds = max(remaining_seconds, 1)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Security Lockout: 5 failed login attempts detected. Please wait {remaining_seconds} seconds before attempting again.",
+        )
+
+
+def record_failed_attempt(key: str):
+    now = datetime.now(timezone.utc)
+    if key not in FAILED_ATTEMPTS:
+        FAILED_ATTEMPTS[key] = []
+    FAILED_ATTEMPTS[key].append(now)
+
+
+def reset_failed_attempts(key: str):
+    FAILED_ATTEMPTS.pop(key, None)
+
 
 @router.post("/login", response_model=TokenResponse)
 async def login(req: LoginRequest, request: Request):
+    clean_email = req.email.strip().lower()
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    throttle_key = f"{clean_email}_{client_ip}"
+
+    # Verify brute-force lockout status
+    check_brute_force(throttle_key)
+
     db = await get_db()
-    user = await db.users.find_one({"email": req.email.lower()})
+    user = await db.users.find_one({"email": clean_email})
 
     # If no user found and matching default admin, auto-bootstrap default admin
     admin_emails = [settings.DEFAULT_ADMIN_EMAIL.lower(), "admin@annapurnacollege.org", "admin@annapurnacollege.edu.in"]
-    if not user and req.email.lower() in admin_emails:
+    if not user and clean_email in admin_emails:
         admin_doc = {
-            "email": req.email.lower(),
+            "email": clean_email,
             "hashed_password": hash_password(settings.DEFAULT_ADMIN_PASSWORD),
             "full_name": settings.DEFAULT_ADMIN_NAME,
             "role": UserRole.SUPER_ADMIN.value,
@@ -48,6 +86,14 @@ async def login(req: LoginRequest, request: Request):
         user = await db.users.find_one({"_id": res.inserted_id})
 
     if not user or not verify_password(req.password, user.get("hashed_password", "")):
+        record_failed_attempt(throttle_key)
+        await audit_service.log_action(
+            action="LOGIN_FAILED",
+            entity_type="USER",
+            user_email=clean_email,
+            ip_address=client_ip,
+            details={"reason": "Invalid credentials", "attempt": len(FAILED_ATTEMPTS.get(throttle_key, []))},
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password credentials.",
@@ -58,6 +104,9 @@ async def login(req: LoginRequest, request: Request):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account has been suspended. Please contact administrator.",
         )
+
+    # Reset failed attempts upon successful authentication
+    reset_failed_attempts(throttle_key)
 
     user_id = str(user["_id"])
     token_claims = {
@@ -78,7 +127,7 @@ async def login(req: LoginRequest, request: Request):
         user_id=user_id,
         user_email=user["email"],
         user_role=user["role"],
-        ip_address=request.client.host if request.client else None,
+        ip_address=client_ip,
     )
 
     return {

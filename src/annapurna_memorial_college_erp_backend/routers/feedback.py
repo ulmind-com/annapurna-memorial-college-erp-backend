@@ -45,13 +45,17 @@ class FeedbackResponse(BaseModel):
 
 
 @router.get("", response_model=List[FeedbackResponse])
-async def get_feedbacks(category: Optional[str] = None):
+async def get_feedbacks(
+    category: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+):
     db = DatabaseManager.get_database()
     query = {}
-    if category:
+    if category and category != "ALL":
         query["category"] = category
 
-    cursor = db.feedback.find(query).sort("created_at", -1)
+    cursor = db.feedback.find(query).skip((page - 1) * limit).limit(limit).sort("created_at", -1)
     results = []
     async for doc in cursor:
         doc["id"] = str(doc.get("_id", doc.get("id", "")))

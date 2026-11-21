@@ -86,6 +86,139 @@ async def create_examination(req: ExaminationCreate, current_user: dict = Depend
     return {"id": str(res.inserted_id), **doc}
 
 
+@router.get("/marksheets")
+async def list_all_marksheets(
+    course_code: Optional[str] = None,
+    semester: Optional[int] = None,
+    exam_id: Optional[str] = None,
+    status: Optional[MarksheetStatus] = None,
+    search: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(100, ge=1, le=500),
+    current_user: dict = Depends(get_current_user),
+):
+    db = await get_db()
+    query = {}
+    if course_code:
+        query["course_code"] = course_code
+    if semester:
+        query["semester"] = semester
+    if exam_id:
+        query["exam_id"] = exam_id
+    if status:
+        query["status"] = status.value
+    if search:
+        query["$or"] = [
+            {"student_name": {"$regex": search, "$options": "i"}},
+            {"roll_number": {"$regex": search, "$options": "i"}},
+            {"registration_number": {"$regex": search, "$options": "i"}},
+        ]
+
+    # If student is viewing, only allow their own published marksheets
+    if current_user.get("role") == UserRole.STUDENT.value:
+        query["student_id"] = current_user.get("entity_id")
+        query["status"] = MarksheetStatus.PUBLISHED.value
+
+    cursor = db.marksheets.find(query).skip((page - 1) * limit).limit(limit).sort("roll_number", 1)
+    items = []
+    async for m in cursor:
+        items.append({
+            "id": str(m["_id"]),
+            "exam_id": m.get("exam_id", "exam-1"),
+            "exam_title": m.get("exam_title", ""),
+            "student_id": m.get("student_id", ""),
+            "roll_number": m.get("roll_number", ""),
+            "registration_number": m.get("registration_number"),
+            "student_name": m.get("student_name", ""),
+            "course_code": m.get("course_code", ""),
+            "course_name": m.get("course_name", m.get("course_code", "")),
+            "semester": m.get("semester", 1),
+            "academic_session": m.get("academic_session", "2024-2026"),
+            "subject_scores": m.get("subject_scores", []),
+            "total_marks_obtained": m.get("total_marks_obtained", 0.0),
+            "grand_max_marks": m.get("grand_max_marks", 0.0),
+            "overall_percentage": m.get("overall_percentage", 0.0),
+            "sgpa": m.get("sgpa", 0.0),
+            "result_status": m.get("result_status", "PASS"),
+            "status": m.get("status", "DRAFT"),
+            "qr_code_hash": m.get("qr_code_hash", ""),
+            "faculty_remarks": m.get("faculty_remarks"),
+            "principal_remarks": m.get("principal_remarks"),
+            "certified_at": m.get("certified_at"),
+            "published_at": m.get("published_at"),
+            "created_at": m.get("created_at"),
+        })
+    return items
+
+
+@router.post("/marksheets")
+async def save_or_update_marksheet(
+    data: dict,
+    current_user: dict = Depends(require_roles([UserRole.FACULTY, UserRole.ADMIN, UserRole.SUPER_ADMIN])),
+):
+    db = await get_db()
+    student_id = data.get("student_id", "st-unknown")
+    roll_number = data.get("roll_number", "AMC-000")
+    semester = data.get("semester", 1)
+    marksheet_id = data.get("id")
+
+    query = {}
+    if marksheet_id and ObjectId.is_valid(marksheet_id):
+        query = {"_id": ObjectId(marksheet_id)}
+    elif marksheet_id and not marksheet_id.startswith("ms-"):
+        query = {"id": marksheet_id}
+    else:
+        query = {"$or": [{"student_id": student_id, "semester": semester}, {"roll_number": roll_number, "semester": semester}]}
+
+    existing = await db.marksheets.find_one(query)
+
+    # Compute SGPA and totals if scores provided
+    subject_scores = data.get("subject_scores", [])
+    total_obtained = sum(float(s.get("total_obtained", 0)) for s in subject_scores)
+    grand_max = sum(float(s.get("max_marks", 100)) for s in subject_scores) or 100.0
+    overall_pct = round((total_obtained / grand_max) * 100, 2) if grand_max > 0 else 0.0
+
+    total_credits = sum(float(s.get("credits", 4)) for s in subject_scores) or 1.0
+    weighted_gp = sum(float(s.get("credits", 4)) * float(s.get("grade_point", 8.0)) for s in subject_scores)
+    sgpa = round(weighted_gp / total_credits, 2) if total_credits > 0 else 8.0
+
+    qr_hash = data.get("qr_code_hash") or f"AMCE-{roll_number}-{semester}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+
+    doc = {
+        "exam_id": data.get("exam_id", "exam-1"),
+        "exam_title": data.get("exam_title", "Semester Examination"),
+        "student_id": student_id,
+        "roll_number": roll_number,
+        "registration_number": data.get("registration_number", "Pending"),
+        "student_name": data.get("student_name", "Student Trainee"),
+        "course_code": data.get("course_code", "BED"),
+        "course_name": data.get("course_name", "Bachelor of Education"),
+        "semester": semester,
+        "academic_session": data.get("academic_session", "2024-2026"),
+        "subject_scores": subject_scores,
+        "total_marks_obtained": total_obtained,
+        "grand_max_marks": grand_max,
+        "overall_percentage": overall_pct,
+        "sgpa": sgpa,
+        "result_status": data.get("result_status", "PASS" if overall_pct >= 40 else "FAIL"),
+        "status": data.get("status", "SUBMITTED_BY_FACULTY"),
+        "qr_code_hash": qr_hash,
+        "faculty_remarks": data.get("faculty_remarks", "Evaluated and verified."),
+        "updated_at": datetime.now(timezone.utc),
+    }
+
+    if existing:
+        await db.marksheets.update_one({"_id": existing["_id"]}, {"$set": doc})
+        doc_id = str(existing["_id"])
+    else:
+        doc["created_at"] = datetime.now(timezone.utc)
+        res = await db.marksheets.insert_one(doc)
+        doc_id = str(res.inserted_id)
+
+    doc.pop("_id", None)
+    return {"id": doc_id, **doc}
+
+
 @router.get("/marksheets/detail/{marksheet_id}")
 async def get_marksheet_detail(marksheet_id: str, current_user: dict = Depends(get_current_user)):
     db = await get_db()
