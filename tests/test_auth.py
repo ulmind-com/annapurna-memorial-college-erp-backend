@@ -40,3 +40,24 @@ async def test_login_invalid_credentials(client: AsyncClient):
         json={"email": "admin@annapurnacollege.org", "password": "WrongPassword999"},
     )
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_teacher_and_student_logins(client: AsyncClient):
+    # Test faculty login with master password
+    resp = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "faculty.soumen@annapurnacollege.edu.in", "password": "Teacher@Amce2024#"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["user"]["role"] in ["FACULTY", "TEACHER"]
+
+    # Test student login with master password
+    resp2 = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "student@annapurnacollege.org", "password": "Student@Amce2024#"},
+    )
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+    assert data2["user"]["role"] == "STUDENT"
