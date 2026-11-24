@@ -19,10 +19,46 @@ async def test_examination_list_and_workflow(client: AsyncClient):
     assert len(exams) >= 1
     exam_id = exams[0]["id"]
 
-    # 2. Get marksheets for this exam
+    # 2. Get marksheets for this exam (or seed a test marksheet if database is freshly cleared)
     ms_resp = await client.get(f"/api/v1/examinations/{exam_id}/marksheets", headers=headers)
     assert ms_resp.status_code == 200
     marksheets = ms_resp.json()
+    if len(marksheets) == 0:
+        create_res = await client.post(
+            "/api/v1/examinations/marksheets",
+            headers=headers,
+            json={
+                "exam_id": exam_id,
+                "exam_title": exams[0]["title"],
+                "student_id": "test-student-id",
+                "student_name": "Test Trainee",
+                "roll_number": "TEST-ROLL-01",
+                "course_code": "BED",
+                "course_name": "Bachelor of Education (B.Ed.)",
+                "semester": 1,
+                "academic_session": "2024-2026",
+                "subject_scores": [
+                    {
+                        "subject_code": "BED-101",
+                        "subject_name": "Childhood and Growing Up",
+                        "credits": 4,
+                        "theory_obtained": 65.0,
+                        "theory_max": 70.0,
+                        "practical_obtained": 25.0,
+                        "practical_max": 30.0,
+                        "total_obtained": 90.0,
+                        "max_marks": 100.0,
+                        "grade_point": 9.0,
+                        "letter_grade": "A+",
+                    }
+                ],
+                "status": "PUBLISHED",
+            },
+        )
+        assert create_res.status_code == 200
+        ms_resp = await client.get(f"/api/v1/examinations/{exam_id}/marksheets", headers=headers)
+        marksheets = ms_resp.json()
+
     assert len(marksheets) >= 1
 
     # 3. Test PDF generation endpoint
@@ -52,6 +88,41 @@ async def test_marksheet_rejection_requires_remarks(client: AsyncClient):
 
     exams = (await client.get("/api/v1/examinations", headers=headers)).json()
     marksheets = (await client.get(f"/api/v1/examinations/{exams[0]['id']}/marksheets", headers=headers)).json()
+    if len(marksheets) == 0:
+        create_res = await client.post(
+            "/api/v1/examinations/marksheets",
+            headers=headers,
+            json={
+                "exam_id": exams[0]["id"],
+                "exam_title": exams[0]["title"],
+                "student_id": "test-student-id",
+                "student_name": "Test Trainee",
+                "roll_number": "TEST-ROLL-01",
+                "course_code": "BED",
+                "course_name": "Bachelor of Education (B.Ed.)",
+                "semester": 1,
+                "academic_session": "2024-2026",
+                "subject_scores": [
+                    {
+                        "subject_code": "BED-101",
+                        "subject_name": "Childhood and Growing Up",
+                        "credits": 4,
+                        "theory_obtained": 65.0,
+                        "theory_max": 70.0,
+                        "practical_obtained": 25.0,
+                        "practical_max": 30.0,
+                        "total_obtained": 90.0,
+                        "max_marks": 100.0,
+                        "grade_point": 9.0,
+                        "letter_grade": "A+",
+                    }
+                ],
+                "status": "DEPARTMENT_VERIFIED",
+            },
+        )
+        assert create_res.status_code == 200
+        marksheets = (await client.get(f"/api/v1/examinations/{exams[0]['id']}/marksheets", headers=headers)).json()
+
     target_ms = marksheets[0]
 
     # Attempt rejection without remarks -> should fail with 400
