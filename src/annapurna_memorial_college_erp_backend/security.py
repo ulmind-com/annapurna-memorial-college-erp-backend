@@ -93,6 +93,7 @@ async def get_current_user(token: Optional[str] = Depends(oauth2_scheme)) -> dic
         "email": email,
         "role": role,
         "name": payload.get("name", ""),
+        "full_name": payload.get("name", ""),
         "entity_id": payload.get("entity_id", None),
     }
 

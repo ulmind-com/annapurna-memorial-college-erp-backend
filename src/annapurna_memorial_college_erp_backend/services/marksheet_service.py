@@ -258,7 +258,8 @@ class MarksheetService:
         elements.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor("#1e3a8a"), spaceAfter=10))
 
         # Title
-        elements.append(Paragraph("OFFICIAL STATEMENT OF MARKS & GRADES", exam_style))
+        tpl = marksheet_data.get("_template") or {}
+        elements.append(Paragraph(tpl.get("format_title") or "OFFICIAL STATEMENT OF MARKS & GRADES", exam_style))
         elements.append(Paragraph(f"<b>Examination:</b> {marksheet_data.get('exam_title', 'Semester Examination')}", sub_style))
         elements.append(Spacer(1, 12))
 
@@ -366,8 +367,8 @@ class MarksheetService:
         sig_data = [
             [
                 Paragraph("Verified By<br/><b>Academic Coordinator</b>", cell_style),
-                Paragraph("Approved By<br/><b>Principal / Director</b>", cell_style),
-                Paragraph("Digitally Certified By<br/><b>Controller of Examinations</b>", cell_style),
+                Paragraph(f"Approved By<br/><b>{tpl.get('principal_signature_title') or 'Principal / Director'}</b>", cell_style),
+                Paragraph(f"Digitally Certified By<br/><b>{tpl.get('controller_signature_title') or 'Controller of Examinations'}</b>", cell_style),
             ]
         ]
         sig_table = Table(sig_data, colWidths=[170, 170, 180])

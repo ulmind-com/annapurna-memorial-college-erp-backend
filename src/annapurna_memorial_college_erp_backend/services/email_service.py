@@ -56,7 +56,7 @@ class EmailService:
 
     async def send_password_reset_email(self, to_email: str, reset_token: str) -> bool:
         subject = f"Password Reset Request - {settings.PROJECT_NAME}"
-        reset_link = f"http://localhost:5173/reset-password?token={reset_token}"
+        reset_link = f"{settings.FRONTEND_URL.rstrip('/')}/reset-password?token={reset_token}"
         html = f"""
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
             <h2 style="color: #1e3a8a;">{settings.COLLEGE_LEGAL_NAME}</h2>

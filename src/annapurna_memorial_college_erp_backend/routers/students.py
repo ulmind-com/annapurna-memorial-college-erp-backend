@@ -24,6 +24,10 @@ from annapurna_memorial_college_erp_backend.services.email_service import email_
 
 logger = logging.getLogger("erp.students")
 
+from annapurna_memorial_college_erp_backend.deps import (
+    get_student_record, get_faculty_scope, classes_query, serialize_student, is_student, is_faculty, oid,
+)
+
 router = APIRouter(prefix="/students", tags=["Students & Admissions"])
 
 
@@ -35,13 +39,18 @@ async def list_students(
     status: Optional[StudentStatus] = None,
     search: Optional[str] = None,
     page: int = Query(1, ge=1),
-    limit: int = Query(25, ge=1, le=100),
+    limit: int = Query(25, ge=1, le=1000),
     current_user: dict = Depends(get_current_user),
 ):
     db = await get_db()
     query = {}
+    if is_student(current_user):
+        raise HTTPException(status_code=403, detail="Students can only view their own profile (/students/me).")
+    if is_faculty(current_user):
+        scope = await get_faculty_scope(db, current_user)
+        query.update(classes_query(scope["classes"]))
     if course_code:
-        query["course_code"] = course_code
+        query["course_code"] = course_code.upper()
     if academic_session:
         query["academic_session"] = academic_session
     if semester:
@@ -96,10 +105,19 @@ async def list_students(
     }
 
 
+@router.get("/me")
+async def get_my_student_profile(current_user: dict = Depends(get_current_user)):
+    db = await get_db()
+    rec = await get_student_record(db, current_user, required=True)
+    return serialize_student(rec)
+
+
 @router.get("/{student_id}")
 async def get_student(student_id: str, current_user: dict = Depends(get_current_user)):
     db = await get_db()
-    s = await db.students.find_one({"_id": ObjectId(student_id)})
+    s = await db.students.find_one({"_id": oid(student_id)})
+    if s and is_student(current_user) and str(s["_id"]) != current_user.get("entity_id"):
+        raise HTTPException(status_code=403, detail="Access denied.")
     if not s:
         raise HTTPException(status_code=404, detail="Student record not found.")
 

@@ -9,6 +9,10 @@ from annapurna_memorial_college_erp_backend.security import (
     UserRole,
 )
 from annapurna_memorial_college_erp_backend.services.storage_service import storage_service
+from annapurna_memorial_college_erp_backend.services.notification_service import notification_service
+from annapurna_memorial_college_erp_backend.deps import (
+    get_student_record, get_faculty_scope, classes_query, student_user_ids, is_student, is_faculty, oid,
+)
 
 router = APIRouter(prefix="/study-materials", tags=["Digital Library & Study Materials"])
 
@@ -19,14 +23,26 @@ async def list_study_materials(
     semester: Optional[int] = None,
     subject_code: Optional[str] = None,
     search: Optional[str] = None,
+    category: Optional[str] = None,
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
     current_user: dict = Depends(get_current_user),
 ):
     db = await get_db()
     query = {}
+    if is_student(current_user):
+        st = await get_student_record(db, current_user, required=True)
+        course_code, semester = st.get("course_code"), st.get("semester", 1)
+        query["category"] = {"$ne": "LESSON_PLAN"}
+    elif is_faculty(current_user) and not course_code:
+        scope = await get_faculty_scope(db, current_user)
+        or_conds = classes_query(scope["classes"]).get("$or", [])
+        or_conds.append({"uploaded_by_id": current_user.get("id")})
+        query["$and"] = [{"$or": or_conds}]
+    if category:
+        query["category"] = category
     if course_code:
-        query["course_code"] = course_code
+        query["course_code"] = course_code.upper()
     if semester:
         query["semester"] = semester
     if subject_code:
@@ -52,6 +68,8 @@ async def list_study_materials(
             "file_type": m.get("file_type", "pdf"),
             "file_size_bytes": m.get("file_size_bytes", 0),
             "tags": m.get("tags", []),
+            "category": m.get("category", "NOTES"),
+            "uploaded_by_id": m.get("uploaded_by_id"),
             "uploaded_by_name": m.get("uploaded_by_name", "Faculty"),
             "downloads_count": m.get("downloads_count", 0),
             "created_at": m.get("created_at"),
@@ -67,10 +85,15 @@ async def upload_study_material(
     semester: int = Form(...),
     subject_code: str = Form(...),
     tags: str = Form(""),  # comma separated
+    category: str = Form("NOTES"),  # NOTES, PDF, LESSON_PLAN, SYLLABUS
     file: Optional[UploadFile] = File(None),
     current_user: dict = Depends(get_current_user),
 ):
     db = await get_db()
+    if is_faculty(current_user):
+        scope = await get_faculty_scope(db, current_user)
+        if (course_code.upper(), semester) not in scope["classes"]:
+            raise HTTPException(status_code=403, detail="You can only upload material for your assigned classes.")
     file_url = ""
     file_type = "pdf"
     file_size_bytes = 0
@@ -85,9 +108,7 @@ async def upload_study_material(
         file_type = file.filename.split(".")[-1].lower() if "." in file.filename else "pdf"
         file_size_bytes = len(file_bytes)
     else:
-        file_url = "/uploads/study_materials_document.pdf"
-        file_type = "pdf"
-        file_size_bytes = 1024 * 128
+        raise HTTPException(status_code=400, detail="Please attach a file to upload.")
 
     doc = {
         "title": title,
@@ -99,6 +120,7 @@ async def upload_study_material(
         "file_type": file_type,
         "file_size_bytes": file_size_bytes,
         "tags": [t.strip() for t in tags.split(",") if t.strip()],
+        "category": (category or "NOTES").upper(),
         "uploaded_by_id": current_user["id"],
         "uploaded_by_name": current_user.get("name") or current_user.get("full_name") or "Faculty Member",
         "downloads_count": 0,
@@ -107,7 +129,25 @@ async def upload_study_material(
 
     res = await db.study_materials.insert_one(doc)
     doc.pop("_id", None)
+    if doc["category"] != "LESSON_PLAN":
+        user_ids = await student_user_ids(db, {"course_code": doc["course_code"], "semester": semester})
+        await notification_service.notify_users(
+            db, user_ids, f"New Study Material: {title}", f"{doc['subject_code']} - uploaded by {doc['uploaded_by_name']}",
+            {"type": "STUDY_MATERIAL", "id": str(res.inserted_id)},
+        )
     return {"id": str(res.inserted_id), **doc}
+
+
+@router.delete("/{material_id}", dependencies=[Depends(require_roles([UserRole.FACULTY, UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
+async def delete_study_material(material_id: str, current_user: dict = Depends(get_current_user)):
+    db = await get_db()
+    m = await db.study_materials.find_one({"_id": oid(material_id)})
+    if not m:
+        raise HTTPException(status_code=404, detail="Material not found.")
+    if is_faculty(current_user) and m.get("uploaded_by_id") != current_user.get("id"):
+        raise HTTPException(status_code=403, detail="You can only delete material you uploaded.")
+    await db.study_materials.delete_one({"_id": m["_id"]})
+    return {"message": "Material deleted successfully."}
 
 
 @router.post("/{material_id}/download")

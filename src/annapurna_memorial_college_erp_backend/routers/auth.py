@@ -70,91 +70,25 @@ async def login(req: LoginRequest, request: Request):
     db = await get_db()
     user = await db.users.find_one({"email": clean_email})
 
-    # Allowed default/master passwords for institutional roles (case-insensitive variants supported)
-    admin_emails = [settings.DEFAULT_ADMIN_EMAIL.lower(), "admin@annapurnacollege.org", "admin@annapurnacollege.edu.in"]
-    admin_accepted_passwords = [settings.DEFAULT_ADMIN_PASSWORD, "Admin@Amce2024#", "Admin@123456", "admin@amce2024#", "admin@123456"]
-    teacher_accepted_passwords = ["Teacher@Amce2024#", "Teacher@123456", "teacher@amce2024#", "teacher@123456"]
-    student_accepted_passwords = ["Student@Amce2024#", "Student@123456", "student@amce2024#", "student@123456"]
+    # One-time bootstrap: create the default Super Admin from environment settings
+    # only when no Super Admin exists yet. No master/shared passwords are accepted.
+    if (
+        not user
+        and clean_email == settings.DEFAULT_ADMIN_EMAIL.lower()
+        and req.password == settings.DEFAULT_ADMIN_PASSWORD
+        and not await db.users.find_one({"role": UserRole.SUPER_ADMIN.value})
+    ):
+        res = await db.users.insert_one({
+            "email": clean_email,
+            "hashed_password": hash_password(req.password),
+            "full_name": settings.DEFAULT_ADMIN_NAME,
+            "role": UserRole.SUPER_ADMIN.value,
+            "is_active": True,
+            "created_at": datetime.now(timezone.utc),
+        })
+        user = await db.users.find_one({"_id": res.inserted_id})
 
-    demo_faculty_emails = [
-        "faculty.soumen@annapurnacollege.edu.in",
-        "teacher@annapurnacollege.org",
-        "soumen.m@annapurnacollege.edu.in",
-    ]
-    demo_student_emails = [
-        "student@annapurnacollege.org",
-        "student@annapurnacollege.edu.in",
-    ]
-
-    # If no user found in users collection, check institutional defaults or students/faculty collections
-    if not user:
-        if clean_email in admin_emails:
-            chosen_pass = req.password if req.password in admin_accepted_passwords else settings.DEFAULT_ADMIN_PASSWORD
-            admin_doc = {
-                "email": clean_email,
-                "hashed_password": hash_password(chosen_pass),
-                "full_name": settings.DEFAULT_ADMIN_NAME,
-                "role": UserRole.SUPER_ADMIN.value,
-                "phone": "+91 9876543210",
-                "is_active": True,
-                "avatar_url": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
-                "created_at": datetime.now(timezone.utc),
-            }
-            res = await db.users.insert_one(admin_doc)
-            user = await db.users.find_one({"_id": res.inserted_id})
-        elif clean_email in demo_faculty_emails or await db.faculty.find_one({"email": clean_email}):
-            fac_rec = await db.faculty.find_one({"email": clean_email})
-            chosen_pass = req.password if req.password in teacher_accepted_passwords else "Teacher@Amce2024#"
-            fac_doc = {
-                "email": clean_email,
-                "hashed_password": hash_password(chosen_pass),
-                "full_name": fac_rec.get("full_name", "Prof. Soumen Mukherjee") if fac_rec else "Prof. Soumen Mukherjee",
-                "role": UserRole.FACULTY.value,
-                "phone": fac_rec.get("phone", "+91 9831987650") if fac_rec else "+91 9831987650",
-                "entity_id": str(fac_rec["_id"]) if fac_rec else None,
-                "is_active": True,
-                "avatar_url": (fac_rec.get("avatar_url") if fac_rec else None) or "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150",
-                "created_at": datetime.now(timezone.utc),
-            }
-            res = await db.users.insert_one(fac_doc)
-            user = await db.users.find_one({"_id": res.inserted_id})
-        elif clean_email in demo_student_emails or await db.students.find_one({"email": clean_email}):
-            stud_rec = await db.students.find_one({"email": clean_email})
-            chosen_pass = req.password if req.password in student_accepted_passwords else "Student@Amce2024#"
-            stud_doc = {
-                "email": clean_email,
-                "hashed_password": hash_password(chosen_pass),
-                "full_name": stud_rec.get("full_name", "Teacher Trainee") if stud_rec else "Teacher Trainee",
-                "role": UserRole.STUDENT.value,
-                "phone": stud_rec.get("phone", "+91 9876009999") if stud_rec else "+91 9876009999",
-                "entity_id": str(stud_rec["_id"]) if stud_rec else None,
-                "is_active": True,
-                "avatar_url": (stud_rec.get("avatar_url") if stud_rec else None) or "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150",
-                "created_at": datetime.now(timezone.utc),
-            }
-            res = await db.users.insert_one(stud_doc)
-            user = await db.users.find_one({"_id": res.inserted_id})
-
-    # Validate credentials
-    is_valid = False
-    if user:
-        if verify_password(req.password, user.get("hashed_password", "")):
-            is_valid = True
-        elif clean_email in admin_emails and (req.password in admin_accepted_passwords or req.password.lower() in [p.lower() for p in admin_accepted_passwords]):
-            is_valid = True
-            new_hash = hash_password(req.password)
-            await db.users.update_one({"_id": user["_id"]}, {"$set": {"hashed_password": new_hash}})
-            user["hashed_password"] = new_hash
-        elif user.get("role") in [UserRole.FACULTY.value, "TEACHER"] and (req.password in teacher_accepted_passwords or req.password.lower() in [p.lower() for p in teacher_accepted_passwords]):
-            is_valid = True
-            new_hash = hash_password(req.password)
-            await db.users.update_one({"_id": user["_id"]}, {"$set": {"hashed_password": new_hash}})
-            user["hashed_password"] = new_hash
-        elif user.get("role") == UserRole.STUDENT.value and (req.password in student_accepted_passwords or req.password.lower() in [p.lower() for p in student_accepted_passwords]):
-            is_valid = True
-            new_hash = hash_password(req.password)
-            await db.users.update_one({"_id": user["_id"]}, {"$set": {"hashed_password": new_hash}})
-            user["hashed_password"] = new_hash
+    is_valid = bool(user) and verify_password(req.password, user.get("hashed_password", ""))
 
     if not user or not is_valid:
         record_failed_attempt(throttle_key)

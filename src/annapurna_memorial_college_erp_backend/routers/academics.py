@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Literal
+from pydantic import BaseModel
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException, Query
 from annapurna_memorial_college_erp_backend.database import get_db
@@ -18,6 +19,10 @@ from annapurna_memorial_college_erp_backend.schemas.academic import (
     AcademicSessionCreate,
     AcademicSessionResponse,
     TimetableSlotCreate,
+)
+
+from annapurna_memorial_college_erp_backend.deps import (
+    get_student_record, get_faculty_scope, classes_query, is_student, is_faculty, oid,
 )
 
 router = APIRouter(prefix="/academics", tags=["Academic Curriculum"])
@@ -136,6 +141,9 @@ async def create_subject(req: SubjectCreate):
 async def update_subject(subject_id: str, req: SubjectUpdate):
     db = await get_db()
     update_data = {k: v for k, v in req.model_dump().items() if v is not None}
+    if update_data.get("faculty_id") == "":
+        update_data["faculty_id"] = None
+        update_data["faculty_name"] = None
     if "faculty_id" in update_data and update_data["faculty_id"]:
         fac = await db.faculty.find_one({"_id": ObjectId(update_data["faculty_id"])})
         if fac:
@@ -146,6 +154,29 @@ async def update_subject(subject_id: str, req: SubjectUpdate):
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Subject not found.")
     return {"message": "Subject updated successfully."}
+
+
+@router.delete("/courses/{course_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
+async def delete_course(course_id: str):
+    db = await get_db()
+    course = await db.courses.find_one({"_id": oid(course_id)})
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found.")
+    enrolled = await db.students.count_documents({"course_code": course["code"]})
+    if enrolled:
+        raise HTTPException(status_code=400, detail=f"Cannot delete: {enrolled} student(s) are enrolled in this course.")
+    await db.courses.delete_one({"_id": course["_id"]})
+    await db.subjects.delete_many({"course_code": course["code"]})
+    return {"message": "Course deleted successfully."}
+
+
+@router.delete("/subjects/{subject_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
+async def delete_subject(subject_id: str):
+    db = await get_db()
+    res = await db.subjects.delete_one({"_id": oid(subject_id)})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+    return {"message": "Subject deleted successfully."}
 
 
 # SESSIONS
@@ -188,18 +219,18 @@ async def list_timetable(
     db = await get_db()
     query = {}
 
-    # If student, match their enrolled course/semester if not specified
-    if current_user.get("role") == UserRole.STUDENT and not course_code:
-        st = await db.students.find_one({
-            "$or": [
-                {"email": current_user.get("email")},
-                {"_id": ObjectId(current_user["id"]) if ObjectId.is_valid(current_user.get("id", "")) else None},
-            ]
-        })
-        if st:
-            course_code = st.get("course_code") or st.get("course")
-            if not semester:
-                semester = st.get("semester", 1)
+    # Students always see only their own class timetable
+    if is_student(current_user):
+        st = await get_student_record(db, current_user, required=True)
+        course_code = st.get("course_code")
+        semester = st.get("semester", 1)
+    elif is_faculty(current_user) and not course_code:
+        scope = await get_faculty_scope(db, current_user)
+        fac_name = (scope["faculty"] or {}).get("full_name") or current_user.get("full_name")
+        or_conds = classes_query(scope["classes"]).get("$or", [])
+        if fac_name:
+            or_conds.append({"faculty": fac_name})
+        query["$or"] = or_conds or [{"_id": {"$exists": False}}]
 
     if course_code:
         query["course_code"] = course_code.upper()
@@ -256,3 +287,78 @@ async def delete_timetable_slot(slot_id: str):
         raise HTTPException(status_code=404, detail="Timetable slot not found.")
     return {"message": "Timetable slot deleted successfully."}
 
+
+
+# ACADEMIC CALENDAR & EXAM ROUTINE
+class CalendarEventCreate(BaseModel):
+    title: str
+    event_type: Literal["HOLIDAY", "EVENT", "EXAM"] = "EVENT"
+    exam_kind: Optional[Literal["SEMESTER", "INTERNAL", "PRACTICAL"]] = None
+    date: str  # YYYY-MM-DD
+    end_date: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    course_code: Optional[str] = None  # None = whole college
+    semester: Optional[int] = None
+    subject_code: Optional[str] = None
+    room: Optional[str] = None
+    description: Optional[str] = None
+
+
+def _event_out(e: dict) -> dict:
+    out = {k: v for k, v in e.items() if k != "_id"}
+    out["id"] = str(e["_id"])
+    return out
+
+
+@router.get("/calendar")
+async def list_calendar_events(
+    event_type: Optional[str] = None,
+    course_code: Optional[str] = None,
+    semester: Optional[int] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    db = await get_db()
+    query: dict = {}
+    if event_type:
+        query["event_type"] = event_type.upper()
+    if is_student(current_user):
+        st = await get_student_record(db, current_user, required=True)
+        course_code, semester = st.get("course_code"), st.get("semester", 1)
+    if course_code:
+        cc = course_code.upper()
+        # College-wide events + events for this course (all semesters or this semester)
+        query["$or"] = [
+            {"course_code": None},
+            {"course_code": cc, "semester": None},
+            {"course_code": cc, "semester": semester} if semester else {"course_code": cc},
+        ]
+    cursor = db.calendar_events.find(query).sort([("date", 1), ("start_time", 1)])
+    return [_event_out(e) async for e in cursor]
+
+
+@router.post("/calendar", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
+async def create_calendar_event(req: CalendarEventCreate, current_user: dict = Depends(get_current_user)):
+    db = await get_db()
+    if not req.title.strip():
+        raise HTTPException(status_code=400, detail="Title is required.")
+    if req.event_type == "EXAM" and not req.course_code:
+        raise HTTPException(status_code=400, detail="Exam schedule needs a course.")
+    doc = req.model_dump()
+    doc["title"] = req.title.strip()
+    doc["course_code"] = req.course_code.upper() if req.course_code else None
+    doc["subject_code"] = req.subject_code.upper() if req.subject_code else None
+    doc["created_by"] = current_user["id"]
+    doc["created_at"] = datetime.now(timezone.utc)
+    res = await db.calendar_events.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return _event_out(doc)
+
+
+@router.delete("/calendar/{event_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
+async def delete_calendar_event(event_id: str):
+    db = await get_db()
+    res = await db.calendar_events.delete_one({"_id": oid(event_id)})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Event not found.")
+    return {"message": "Event deleted."}

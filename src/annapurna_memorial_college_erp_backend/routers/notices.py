@@ -19,6 +19,8 @@ from annapurna_memorial_college_erp_backend.services.email_service import email_
 from annapurna_memorial_college_erp_backend.services.notification_service import notification_service
 from annapurna_memorial_college_erp_backend.services.audit_service import audit_service
 
+from annapurna_memorial_college_erp_backend.deps import is_faculty, oid
+
 router = APIRouter(prefix="/notices", tags=["Notices & Circulars"])
 
 
@@ -78,19 +80,25 @@ async def create_notice(req: NoticeCreate, current_user: dict = Depends(get_curr
     doc["target_audience"] = doc["target_audience"].value if hasattr(doc["target_audience"], "value") else doc["target_audience"]
     doc["priority"] = doc["priority"].value if hasattr(doc["priority"], "value") else doc["priority"]
     doc["published_by_id"] = current_user["id"]
-    doc["published_by_name"] = current_user.get("name", "College Office")
+    doc["published_by_name"] = current_user.get("full_name") or "College Office"
     doc["views_count"] = 0
     doc["created_at"] = datetime.now(timezone.utc)
 
     res = await db.notices.insert_one(doc)
     notice_id = str(res.inserted_id)
 
-    # Broadcast push notification if requested
+    # Push notification to every targeted user's registered devices
     if req.send_push:
-        await notification_service.send_push_notification(
-            title=f"Circular: {req.title}",
-            body=req.content[:150] + ("..." if len(req.content) > 150 else ""),
-            topic=req.target_audience.value.lower(),
+        role_filter = {}
+        if req.target_audience.value == "STUDENTS":
+            role_filter = {"role": "STUDENT"}
+        elif req.target_audience.value == "FACULTY":
+            role_filter = {"role": "FACULTY"}
+        user_ids = [str(u["_id"]) async for u in db.users.find(role_filter, {"_id": 1})]
+        await notification_service.notify_users(
+            db, user_ids, f"Notice: {req.title}",
+            req.content[:150] + ("..." if len(req.content) > 150 else ""),
+            {"type": "NOTICE", "id": notice_id},
         )
 
     # Send email notification if urgent / requested
@@ -98,7 +106,7 @@ async def create_notice(req: NoticeCreate, current_user: dict = Depends(get_curr
         # Collect recipients based on audience
         email_query = {}
         if req.target_audience != TargetAudience.ALL:
-            email_query["role"] = req.target_audience.value[:-1]  # STUDENTS -> STUDENT
+            email_query["role"] = "STUDENT" if req.target_audience.value == "STUDENTS" else "FACULTY"
         recipients_cursor = db.users.find(email_query, {"email": 1}).limit(200)
         emails = [u["email"] async for u in recipients_cursor if u.get("email")]
         if emails:
@@ -122,10 +130,29 @@ async def create_notice(req: NoticeCreate, current_user: dict = Depends(get_curr
     return {"id": notice_id, **doc}
 
 
-@router.delete("/{notice_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
+@router.put("/{notice_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.FACULTY]))])
+async def update_notice(notice_id: str, req: NoticeUpdate, current_user: dict = Depends(get_current_user)):
+    db = await get_db()
+    n = await db.notices.find_one({"_id": oid(notice_id)})
+    if not n:
+        raise HTTPException(status_code=404, detail="Notice not found.")
+    if is_faculty(current_user) and n.get("published_by_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="You can only edit notices you published.")
+    update = {k: (v.value if hasattr(v, "value") else v) for k, v in req.model_dump().items() if v is not None}
+    update["updated_at"] = datetime.now(timezone.utc)
+    await db.notices.update_one({"_id": n["_id"]}, {"$set": update})
+    n.update(update)
+    n["id"] = str(n.pop("_id"))
+    return n
+
+
+@router.delete("/{notice_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.FACULTY]))])
 async def delete_notice(notice_id: str, current_user: dict = Depends(get_current_user)):
     db = await get_db()
-    res = await db.notices.delete_one({"_id": ObjectId(notice_id)})
+    n = await db.notices.find_one({"_id": oid(notice_id)})
+    if n and is_faculty(current_user) and n.get("published_by_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="You can only delete notices you published.")
+    res = await db.notices.delete_one({"_id": oid(notice_id)})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Notice not found.")
 

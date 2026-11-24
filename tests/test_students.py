@@ -1,3 +1,4 @@
+from annapurna_memorial_college_erp_backend.config import settings
 import pytest
 from httpx import AsyncClient
 
@@ -7,7 +8,7 @@ async def test_list_students(client: AsyncClient):
     # First login as admin
     login_resp = await client.post(
         "/api/v1/auth/login",
-        json={"email": "admin@annapurnacollege.org", "password": "Admin@123456"},
+        json={"email": settings.DEFAULT_ADMIN_EMAIL, "password": settings.DEFAULT_ADMIN_PASSWORD},
     )
     token = login_resp.json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}

@@ -23,6 +23,8 @@ from annapurna_memorial_college_erp_backend.services.audit_service import audit_
 
 logger = logging.getLogger("erp.faculty")
 
+from annapurna_memorial_college_erp_backend.deps import get_faculty_scope
+
 router = APIRouter(prefix="/faculty", tags=["Faculty & Staff"])
 
 
@@ -32,7 +34,7 @@ async def list_faculty(
     status: Optional[FacultyStatus] = None,
     search: Optional[str] = None,
     page: int = Query(1, ge=1),
-    limit: int = Query(25, ge=1, le=100),
+    limit: int = Query(25, ge=1, le=1000),
     current_user: dict = Depends(get_current_user),
 ):
     db = await get_db()
@@ -77,6 +79,57 @@ async def list_faculty(
         "page": page,
         "page_size": limit,
         "total_pages": (total + limit - 1) // limit if total > 0 else 1,
+    }
+
+
+@router.get("/me")
+async def get_my_faculty_profile(current_user: dict = Depends(get_current_user)):
+    """Logged-in teacher's profile with assigned subjects, classes and student counts."""
+    db = await get_db()
+    scope = await get_faculty_scope(db, current_user)
+    f = scope["faculty"]
+    if not f:
+        raise HTTPException(status_code=404, detail="No faculty profile is linked to this account. Please contact the college office.")
+    subjects = []
+    for s in scope["subjects"]:
+        subjects.append({
+            "id": str(s["_id"]),
+            "code": s["code"],
+            "title": s.get("title", s["code"]),
+            "course_code": s["course_code"],
+            "semester": s.get("semester", 1),
+            "credits": s.get("credits", 4),
+            "full_marks": s.get("full_marks", 100),
+            "theory_marks": s.get("theory_marks", 70),
+            "practical_marks": s.get("practical_marks", 30),
+            "pass_marks": s.get("pass_marks", 40),
+            "student_count": await db.students.count_documents({"course_code": s["course_code"], "semester": s.get("semester", 1)}),
+        })
+    classes = []
+    for c, sem in scope["classes"]:
+        course = await db.courses.find_one({"code": c})
+        classes.append({
+            "course_code": c,
+            "course_name": course.get("name", c) if course else c,
+            "semester": sem,
+            "student_count": await db.students.count_documents({"course_code": c, "semester": sem}),
+        })
+    return {
+        "id": str(f["_id"]),
+        "employee_id": f.get("employee_id"),
+        "full_name": f.get("full_name"),
+        "email": f.get("email"),
+        "phone": f.get("phone"),
+        "department": f.get("department"),
+        "designation": f.get("designation"),
+        "qualification": f.get("qualification"),
+        "specialization": f.get("specialization"),
+        "joining_date": f.get("joining_date"),
+        "assigned_subjects": f.get("assigned_subjects", []),
+        "status": f.get("status", "ACTIVE"),
+        "avatar_url": f.get("avatar_url"),
+        "subjects": subjects,
+        "classes": classes,
     }
 
 

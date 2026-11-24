@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     FIREBASE_CREDENTIALS_PATH: str = os.getenv("FIREBASE_CREDENTIALS_PATH", "firebase-service-account.json")
 
     # Superadmin Default Credentials
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5173")
     DEFAULT_ADMIN_EMAIL: str = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@annapurnacollege.edu.in")
     DEFAULT_ADMIN_PASSWORD: str = os.getenv("DEFAULT_ADMIN_PASSWORD", "Admin@123456")
     DEFAULT_ADMIN_NAME: str = os.getenv("DEFAULT_ADMIN_NAME", "Dr. Arnab Senapati, Principal")

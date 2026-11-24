@@ -5,6 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from annapurna_memorial_college_erp_backend.database import DatabaseManager
+from annapurna_memorial_college_erp_backend.deps import (
+    get_student_record, get_faculty_record, get_faculty_subjects, is_student, is_faculty, oid,
+)
 from annapurna_memorial_college_erp_backend.security import (
     get_current_user,
     require_roles,
@@ -62,21 +65,13 @@ async def get_feedbacks(
     if category and category != "ALL":
         query["category"] = category
 
-    # If role is STUDENT, only return their own submitted feedback
-    if current_user.get("role") == UserRole.STUDENT:
-        st = await db.students.find_one({
-            "$or": [
-                {"email": current_user.get("email")},
-                {"_id": ObjectId(current_user["id"]) if ObjectId.is_valid(current_user.get("id", "")) else None},
-            ]
-        })
-        st_id = str(st["_id"]) if st else current_user.get("id")
-        st_roll = st.get("roll_number") if st else ""
-        query["$or"] = [
-            {"student_id": st_id},
-            {"roll_number": st_roll},
-            {"student_email": current_user.get("email")},
-        ]
+    if is_student(current_user):
+        st = await get_student_record(db, current_user, required=True)
+        query["student_id"] = str(st["_id"])
+    elif is_faculty(current_user):
+        fac = await get_faculty_record(db, current_user)
+        codes = [sub["code"] for sub in await get_faculty_subjects(db, fac)]
+        query["$or"] = [{"faculty_name": (fac or {}).get("full_name", "__none__")}, {"subject_code": {"$in": codes}}]
 
     cursor = db.feedback.find(query).skip((page - 1) * limit).limit(limit).sort("created_at", -1)
     results = []
@@ -97,28 +92,17 @@ async def submit_feedback(
     db = DatabaseManager.get_database()
     doc = data.model_dump()
 
-    # Look up student details dynamically
-    st = await db.students.find_one({
-        "$or": [
-            {"email": current_user.get("email")},
-            {"_id": ObjectId(current_user["id"]) if ObjectId.is_valid(current_user.get("id", "")) else None},
-        ]
-    })
-
-    if st:
-        doc["student_id"] = str(st["_id"])
-        doc["student_name"] = st.get("full_name") or current_user.get("full_name", "Student")
-        doc["roll_number"] = st.get("roll_number", "AMC-STU")
-        doc["student_email"] = st.get("email") or current_user.get("email")
-        doc["course_code"] = (data.course_code or st.get("course_code") or st.get("course") or "GENERAL").upper()
-        doc["semester"] = data.semester or st.get("semester", 1)
-    else:
-        doc["student_id"] = current_user.get("id")
-        doc["student_name"] = current_user.get("full_name", "Enrolled Trainee")
-        doc["roll_number"] = current_user.get("entity_id") or "AMC-STU"
-        doc["student_email"] = current_user.get("email")
-        doc["course_code"] = (data.course_code or "GENERAL").upper()
-        doc["semester"] = data.semester or 1
+    if not is_student(current_user):
+        raise HTTPException(status_code=403, detail="Only students can submit feedback.")
+    if not (data.comments or "").strip():
+        raise HTTPException(status_code=400, detail="Feedback comments are required.")
+    st = await get_student_record(db, current_user, required=True)
+    doc["student_id"] = str(st["_id"])
+    doc["student_name"] = st.get("full_name", "")
+    doc["roll_number"] = st.get("roll_number", "")
+    doc["student_email"] = st.get("email")
+    doc["course_code"] = st.get("course_code", "")
+    doc["semester"] = st.get("semester", 1)
 
     doc["status"] = "PENDING"
     doc["created_at"] = datetime.utcnow().isoformat()
@@ -132,20 +116,19 @@ async def submit_feedback(
 
 
 @router.post("/{feedback_id}/respond", response_model=FeedbackResponse)
-async def respond_feedback(feedback_id: str, data: FeedbackRespond):
+async def respond_feedback(
+    feedback_id: str,
+    data: FeedbackRespond,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.FACULTY])),
+):
     db = DatabaseManager.get_database()
-    from bson import ObjectId
-
-    try:
-        obj_id = ObjectId(feedback_id)
-        query = {"_id": obj_id}
-    except Exception:
-        query = {"id": feedback_id}
+    query = {"_id": oid(feedback_id)}
 
     update = {
         "$set": {
             "status": "RESOLVED",
             "admin_response": data.response,
+            "responded_by": current_user.get("full_name"),
         }
     }
 
