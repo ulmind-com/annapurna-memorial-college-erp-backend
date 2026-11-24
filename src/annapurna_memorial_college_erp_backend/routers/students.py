@@ -134,13 +134,32 @@ async def get_student(student_id: str, current_user: dict = Depends(get_current_
 @router.post("", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
 async def create_student(req: StudentCreate, current_user: dict = Depends(get_current_user)):
     db = await get_db()
-    existing = await db.students.find_one({
-        "$or": [{"roll_number": req.roll_number}, {"email": req.email.lower()}]
-    })
-    if existing:
+    clean_email = req.email.strip().lower()
+    clean_roll = req.roll_number.strip()
+
+    # 1. Check if email is already registered to another student
+    existing_st_email = await db.students.find_one({"email": clean_email})
+    if existing_st_email:
         raise HTTPException(
             status_code=400,
-            detail="Student with this Roll Number or Email already exists.",
+            detail=f"This email '{req.email}' is already registered to student '{existing_st_email.get('full_name')}' (Roll: {existing_st_email.get('roll_number')}). Please provide another email address."
+        )
+
+    # 2. Check if roll number is already in use
+    existing_st_roll = await db.students.find_one({"roll_number": clean_roll})
+    if existing_st_roll:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Roll Number '{req.roll_number}' already belongs to student '{existing_st_roll.get('full_name')}'. Please enter a unique Roll Number."
+        )
+
+    # 3. Check if email is already registered in users collection
+    existing_user = await db.users.find_one({"email": clean_email})
+    if existing_user:
+        role_label = existing_user.get("role", "user")
+        raise HTTPException(
+            status_code=400,
+            detail=f"This email '{req.email}' is already in use by an existing {role_label} account. Please provide another email address."
         )
 
     doc = req.model_dump()

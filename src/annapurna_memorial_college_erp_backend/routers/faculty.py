@@ -109,11 +109,33 @@ async def get_faculty(faculty_id: str, current_user: dict = Depends(get_current_
 @router.post("", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
 async def create_faculty(req: FacultyCreate, current_user: dict = Depends(get_current_user)):
     db = await get_db()
-    existing = await db.faculty.find_one({
-        "$or": [{"employee_id": req.employee_id}, {"email": req.email.lower()}]
-    })
-    if existing:
-        raise HTTPException(status_code=400, detail="Faculty with this Employee ID or Email already exists.")
+    clean_email = req.email.strip().lower()
+    clean_emp_id = req.employee_id.strip()
+
+    # 1. Check if email is already registered to another faculty member
+    existing_fac_email = await db.faculty.find_one({"email": clean_email})
+    if existing_fac_email:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This email '{req.email}' is already registered to faculty member '{existing_fac_email.get('full_name')}'. Please provide another email address."
+        )
+
+    # 2. Check if employee ID is already in use
+    existing_fac_emp = await db.faculty.find_one({"employee_id": clean_emp_id})
+    if existing_fac_emp:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Employee ID '{req.employee_id}' is already assigned to faculty member '{existing_fac_emp.get('full_name')}'. Please enter a unique Employee ID."
+        )
+
+    # 3. Check if email is already registered in users collection
+    existing_user = await db.users.find_one({"email": clean_email})
+    if existing_user:
+        role_label = existing_user.get("role", "user")
+        raise HTTPException(
+            status_code=400,
+            detail=f"This email '{req.email}' is already in use by an existing {role_label} account. Please provide another email address."
+        )
 
     doc = req.model_dump()
     doc["email"] = doc["email"].lower()

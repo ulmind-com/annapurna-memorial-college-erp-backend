@@ -1,6 +1,7 @@
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Query
 from annapurna_memorial_college_erp_backend.config import settings
 from annapurna_memorial_college_erp_backend.database import get_db
 from annapurna_memorial_college_erp_backend.security import (
@@ -328,3 +329,57 @@ async def change_password(
     )
 
     return {"message": "Password changed successfully."}
+
+
+@router.get("/check-email")
+async def check_email_availability(
+    email: str = Query(..., description="Email address to verify"),
+    type: Optional[str] = Query(None, description="FACULTY or STUDENT"),
+):
+    clean_email = email.strip().lower()
+    if not clean_email or "@" not in clean_email:
+        return {"available": True, "exists": False, "detail": "Valid email required"}
+
+    db = await get_db()
+
+    # 1. Check Faculty collection
+    existing_fac = await db.faculty.find_one({"email": clean_email})
+    if existing_fac:
+        return {
+            "available": False,
+            "exists": True,
+            "role": "FACULTY",
+            "name": existing_fac.get("full_name", "Faculty Member"),
+            "detail": f"This email '{email}' is already registered to faculty member '{existing_fac.get('full_name')}'. Please provide another email address."
+        }
+
+    # 2. Check Students collection
+    existing_st = await db.students.find_one({"email": clean_email})
+    if existing_st:
+        return {
+            "available": False,
+            "exists": True,
+            "role": "STUDENT",
+            "name": existing_st.get("full_name", "Student Trainee"),
+            "roll_number": existing_st.get("roll_number"),
+            "detail": f"This email '{email}' is already registered to student '{existing_st.get('full_name')}' (Roll: {existing_st.get('roll_number')}). Please provide another email address."
+        }
+
+    # 3. Check Users collection (e.g. Super Admin or other accounts)
+    existing_u = await db.users.find_one({"email": clean_email})
+    if existing_u:
+        role_label = existing_u.get("role", "user")
+        return {
+            "available": False,
+            "exists": True,
+            "role": role_label,
+            "name": existing_u.get("full_name", "User"),
+            "detail": f"This email '{email}' is already in use by an existing {role_label} account. Please provide another email address."
+        }
+
+    return {
+        "available": True,
+        "exists": False,
+        "detail": "Email address is available for registration."
+    }
+
