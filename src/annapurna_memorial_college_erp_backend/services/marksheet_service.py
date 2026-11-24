@@ -1,7 +1,8 @@
 import io
 import hashlib
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Tuple
+from pathlib import Path
+from typing import List, Dict, Any, Tuple, Optional
 from fastapi import HTTPException, status
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
@@ -16,6 +17,39 @@ from annapurna_memorial_college_erp_backend.schemas.examination import (
     SubjectScoreOutput,
     AuditTrailEntry,
 )
+
+
+def _load_image(url: Optional[str]):
+    """Read an uploaded template image (local /uploads path or Cloudinary URL)."""
+    if not url:
+        return None
+    try:
+        from reportlab.lib.utils import ImageReader
+        if url.startswith("/uploads/"):
+            path = Path("uploads") / url[len("/uploads/"):]
+            return ImageReader(str(path)) if path.is_file() else None
+        if url.startswith("http"):
+            import httpx
+            r = httpx.get(url, timeout=10)
+            r.raise_for_status()
+            return ImageReader(io.BytesIO(r.content))
+    except Exception:
+        return None
+    return None
+
+
+def _background_painter(url: Optional[str]):
+    """Return a ReportLab page callback that draws the admin-uploaded design full-page."""
+    img = _load_image(url)
+
+    def paint(canvas, doc):
+        if img is not None:
+            w, h = doc.pagesize
+            canvas.saveState()
+            canvas.drawImage(img, 0, 0, width=w, height=h, preserveAspectRatio=False, mask="auto")
+            canvas.restoreState()
+
+    return paint
 
 
 class MarksheetService:
@@ -381,9 +415,63 @@ class MarksheetService:
         )
         elements.append(sig_table)
 
-        doc.build(elements)
+        paint = _background_painter((marksheet_data.get('_template') or {}).get('background_url'))
+        doc.build(elements, onFirstPage=paint, onLaterPages=paint)
         buffer.seek(0)
         return buffer.getvalue()
+
+
+def generate_certificate_pdf(ms: Dict[str, Any], template: Dict[str, Any], college: Dict[str, Any]) -> bytes:
+    """Semester / course completion certificate on the admin-uploaded certificate design."""
+    from reportlab.lib.pagesizes import landscape
+    from reportlab.lib.enums import TA_CENTER
+
+    buffer = io.BytesIO()
+    page = landscape(A4)
+    doc = SimpleDocTemplate(buffer, pagesize=page, leftMargin=72, rightMargin=72,
+                            topMargin=float(template.get("top_margin") or 150), bottomMargin=60)
+    styles = getSampleStyleSheet()
+    center = ParagraphStyle("c", parent=styles["Normal"], alignment=TA_CENTER, fontSize=14, leading=22)
+    title = ParagraphStyle("t", parent=center, fontSize=26, leading=32, fontName="Helvetica-Bold")
+    name = ParagraphStyle("n", parent=center, fontSize=22, leading=30, fontName="Helvetica-Bold")
+    values = {
+        "student_name": ms.get("student_name", ""),
+        "roll_number": ms.get("roll_number", ""),
+        "registration_number": ms.get("registration_number") or "",
+        "course_name": ms.get("course_name", ms.get("course_code", "")),
+        "semester": ms.get("semester", ""),
+        "session": ms.get("academic_session", ""),
+        "sgpa": ms.get("sgpa", ""),
+        "percentage": ms.get("overall_percentage", ""),
+        "result": ms.get("result_status", ""),
+        "college_name": college.get("name") or settings.COLLEGE_LEGAL_NAME,
+    }
+    body_tpl = template.get("body_text") or (
+        "This is to certify that {student_name} (Roll No. {roll_number}) has successfully completed "
+        "Semester {semester} of {course_name} for the session {session} with SGPA {sgpa} and result {result}."
+    )
+    try:
+        body = body_tpl.format(**values)
+    except (KeyError, IndexError, ValueError):
+        body = body_tpl
+    elements = []
+    if not template.get("background_url"):
+        elements += [Paragraph(values["college_name"].upper(), center), Spacer(1, 12)]
+    elements += [
+        Paragraph(template.get("title") or "CERTIFICATE", title), Spacer(1, 24),
+        Paragraph(values["student_name"], name), Spacer(1, 18),
+        Paragraph(body, center), Spacer(1, 40),
+        Table(
+            [[Paragraph(f"<b>{template.get('left_signature_title') or 'Controller of Examinations'}</b>", center),
+              Paragraph(f"<b>{template.get('right_signature_title') or college.get('principal_name') or 'Principal'}</b>", center)]],
+            colWidths=[(page[0] - 144) / 2] * 2,
+        ),
+        Spacer(1, 12),
+        Paragraph(f"<font size=9>Verification: {ms.get('qr_code_hash', '')}</font>", center),
+    ]
+    paint = _background_painter(template.get("background_url"))
+    doc.build(elements, onFirstPage=paint, onLaterPages=paint)
+    return buffer.getvalue()
 
 
 marksheet_service = MarksheetService()

@@ -23,7 +23,8 @@ from annapurna_memorial_college_erp_backend.services.audit_service import audit_
 
 logger = logging.getLogger("erp.faculty")
 
-from annapurna_memorial_college_erp_backend.deps import get_faculty_scope
+from annapurna_memorial_college_erp_backend.deps import get_faculty_scope, oid
+from annapurna_memorial_college_erp_backend.validators import validate_new_email
 
 router = APIRouter(prefix="/faculty", tags=["Faculty & Staff"])
 
@@ -165,15 +166,11 @@ async def create_faculty(req: FacultyCreate, current_user: dict = Depends(get_cu
     clean_email = req.email.strip().lower()
     clean_emp_id = req.employee_id.strip()
 
-    # 1. Check if email is already registered to another faculty member
-    existing_fac_email = await db.faculty.find_one({"email": clean_email})
-    if existing_fac_email:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This email '{req.email}' is already registered to faculty member '{existing_fac_email.get('full_name')}'. Please provide another email address."
-        )
+    clean_email = await validate_new_email(db, clean_email)
+    for field in ("full_name", "employee_id", "department", "designation", "qualification", "phone"):
+        if not str(getattr(req, field) or "").strip():
+            raise HTTPException(status_code=400, detail=f"{field.replace('_', ' ').title()} is required.")
 
-    # 2. Check if employee ID is already in use
     existing_fac_emp = await db.faculty.find_one({"employee_id": clean_emp_id})
     if existing_fac_emp:
         raise HTTPException(
@@ -181,14 +178,6 @@ async def create_faculty(req: FacultyCreate, current_user: dict = Depends(get_cu
             detail=f"Employee ID '{req.employee_id}' is already assigned to faculty member '{existing_fac_emp.get('full_name')}'. Please enter a unique Employee ID."
         )
 
-    # 3. Check if email is already registered in users collection
-    existing_user = await db.users.find_one({"email": clean_email})
-    if existing_user:
-        role_label = existing_user.get("role", "user")
-        raise HTTPException(
-            status_code=400,
-            detail=f"This email '{req.email}' is already in use by an existing {role_label} account. Please provide another email address."
-        )
 
     doc = req.model_dump()
     doc["email"] = doc["email"].lower()
@@ -316,12 +305,17 @@ async def update_faculty(
         raise HTTPException(status_code=400, detail="No fields provided for update.")
 
     if "email" in update_data:
-        update_data["email"] = update_data["email"].lower()
+        update_data["email"] = await validate_new_email(db, update_data["email"], exclude_entity_id=faculty_id)
+    if "employee_id" in update_data:
+        update_data["employee_id"] = update_data["employee_id"].strip()
+        dup = await db.faculty.find_one({"employee_id": update_data["employee_id"], "_id": {"$ne": oid(faculty_id)}})
+        if dup:
+            raise HTTPException(status_code=400, detail=f"Employee ID already assigned to '{dup.get('full_name')}'.")
     if "status" in update_data and hasattr(update_data["status"], "value"):
         update_data["status"] = update_data["status"].value
 
     update_data["updated_at"] = datetime.now(timezone.utc)
-    res = await db.faculty.update_one({"_id": ObjectId(faculty_id)}, {"$set": update_data})
+    res = await db.faculty.update_one({"_id": oid(faculty_id)}, {"$set": update_data})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Faculty member not found.")
 
@@ -352,9 +346,12 @@ async def update_faculty(
 @router.delete("/{faculty_id}", dependencies=[Depends(require_roles([UserRole.SUPER_ADMIN]))])
 async def delete_faculty(faculty_id: str, current_user: dict = Depends(get_current_user)):
     db = await get_db()
-    res = await db.faculty.delete_one({"_id": ObjectId(faculty_id)})
+    res = await db.faculty.delete_one({"_id": oid(faculty_id)})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Faculty member not found.")
+    # Remove the login account and unassign subjects so nothing is left dangling
+    await db.users.delete_many({"entity_id": faculty_id})
+    await db.subjects.update_many({"faculty_id": faculty_id}, {"$set": {"faculty_id": None, "faculty_name": None}})
 
     await audit_service.log_action(
         action="FACULTY_DELETED",

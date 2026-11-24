@@ -18,7 +18,7 @@ from annapurna_memorial_college_erp_backend.schemas.examination import (
     MarksheetStatus,
     AuditTrailEntry,
 )
-from annapurna_memorial_college_erp_backend.services.marksheet_service import marksheet_service
+from annapurna_memorial_college_erp_backend.services.marksheet_service import marksheet_service, generate_certificate_pdf
 from annapurna_memorial_college_erp_backend.services.email_service import email_service
 from annapurna_memorial_college_erp_backend.services.audit_service import audit_service
 
@@ -26,6 +26,15 @@ from annapurna_memorial_college_erp_backend.deps import (
     get_student_record, get_faculty_scope, classes_query, is_student, is_faculty, oid,
 )
 from annapurna_memorial_college_erp_backend.services.notification_service import notification_service
+
+
+async def _template(db, kind: str, course_code: Optional[str]) -> dict:
+    """Course-specific template (e.g. marksheet_template:BED) falling back to the global one."""
+    for key in ([f"{kind}_template:{course_code}"] if course_code else []) + [f"{kind}_template"]:
+        doc = await db.app_settings.find_one({"key": key})
+        if doc and doc.get("value"):
+            return doc["value"]
+    return {}
 
 
 async def _notify_result(student_ids: list, db) -> None:
@@ -640,8 +649,7 @@ async def download_marksheet_pdf(
         st = await get_student_record(db, current_user, required=True)
         if ms.get("student_id") != str(st["_id"]) or ms.get("status") != MarksheetStatus.PUBLISHED.value:
             raise HTTPException(status_code=403, detail="Marksheet is not available.")
-    template = await db.app_settings.find_one({"key": "marksheet_template"})
-    ms["_template"] = (template or {}).get("value", {})
+    ms["_template"] = await _template(db, "marksheet", ms.get("course_code"))
     pdf_bytes = marksheet_service.generate_pdf(ms)
     filename = f"Marksheet_{ms.get('roll_number')}_{ms.get('semester')}.pdf"
 
@@ -650,6 +658,25 @@ async def download_marksheet_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+@router.get("/marksheets/{marksheet_id}/certificate")
+async def download_certificate_pdf(marksheet_id: str, current_user: dict = Depends(get_current_user)):
+    db = await get_db()
+    ms = await db.marksheets.find_one({"_id": oid(marksheet_id)})
+    if not ms:
+        raise HTTPException(status_code=404, detail="Marksheet not found.")
+    if ms.get("status") != MarksheetStatus.PUBLISHED.value:
+        raise HTTPException(status_code=400, detail="Certificate is available only after the result is published.")
+    if is_student(current_user):
+        st = await get_student_record(db, current_user, required=True)
+        if ms.get("student_id") != str(st["_id"]):
+            raise HTTPException(status_code=403, detail="Certificate is not available.")
+    college = (await db.app_settings.find_one({"key": "college_profile"}) or {}).get("value", {})
+    pdf_bytes = generate_certificate_pdf(ms, await _template(db, "certificate", ms.get("course_code")), college)
+    filename = f"Certificate_{ms.get('roll_number')}_Sem{ms.get('semester')}.pdf"
+    return Response(content=pdf_bytes, media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 
 @router.get("/verify/{qr_hash}")
@@ -680,8 +707,9 @@ async def public_verify_marksheet(qr_hash: str):
 
 @router.post("/publish-results", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
 async def publish_course_results(
-    course_code: str = Query(..., description="Course code to publish"),
-    semester: int = Query(..., description="Semester to publish"),
+    course_code: str = Query(..., description="Course code"),
+    semester: int = Query(..., description="Semester"),
+    visible: bool = Query(True, description="true = publish results to students, false = hide them again"),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -690,6 +718,17 @@ async def publish_course_results(
     """
     db = await get_db()
     now = datetime.now(timezone.utc)
+    if not visible:
+        res = await db.marksheets.update_many(
+            {"course_code": course_code.strip().upper(), "semester": semester, "status": MarksheetStatus.PUBLISHED.value},
+            {"$set": {"status": MarksheetStatus.ADMIN_APPROVED.value, "published_at": None}},
+        )
+        await audit_service.log_action(
+            action="EXAMINATION_RESULTS_HIDDEN", entity_type="EXAMINATION", user_id=current_user["id"],
+            user_email=current_user["email"], user_role=current_user["role"],
+            details={"course_code": course_code, "semester": semester, "hidden_count": res.modified_count},
+        )
+        return {"message": f"Results hidden from students for {course_code} Semester {semester}.", "modified_count": res.modified_count}
     clean_code = course_code.strip()
     norm_code = clean_code.replace(".", "").upper()
 

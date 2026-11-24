@@ -30,6 +30,7 @@ class FacultyCreate(FacultyBase):
 
 
 class FacultyUpdate(BaseModel):
+    employee_id: Optional[str] = None
     full_name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None

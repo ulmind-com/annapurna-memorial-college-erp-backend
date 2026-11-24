@@ -24,6 +24,7 @@ from annapurna_memorial_college_erp_backend.services.email_service import email_
 
 logger = logging.getLogger("erp.students")
 
+from annapurna_memorial_college_erp_backend.validators import validate_new_email
 from annapurna_memorial_college_erp_backend.deps import (
     get_student_record, get_faculty_scope, classes_query, serialize_student, is_student, is_faculty, oid,
 )
@@ -155,15 +156,8 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
     clean_email = req.email.strip().lower()
     clean_roll = req.roll_number.strip()
 
-    # 1. Check if email is already registered to another student
-    existing_st_email = await db.students.find_one({"email": clean_email})
-    if existing_st_email:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This email '{req.email}' is already registered to student '{existing_st_email.get('full_name')}' (Roll: {existing_st_email.get('roll_number')}). Please provide another email address."
-        )
-
-    # 2. Check if roll number is already in use
+    # Valid, non-typo, deliverable email not used by any student/faculty/login
+    clean_email = await validate_new_email(db, clean_email)
     existing_st_roll = await db.students.find_one({"roll_number": clean_roll})
     if existing_st_roll:
         raise HTTPException(
@@ -171,17 +165,21 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
             detail=f"Roll Number '{req.roll_number}' already belongs to student '{existing_st_roll.get('full_name')}'. Please enter a unique Roll Number."
         )
 
-    # 3. Check if email is already registered in users collection
-    existing_user = await db.users.find_one({"email": clean_email})
-    if existing_user:
-        role_label = existing_user.get("role", "user")
-        raise HTTPException(
-            status_code=400,
-            detail=f"This email '{req.email}' is already in use by an existing {role_label} account. Please provide another email address."
-        )
+    # Course must exist and have a vacant seat
+    course_exists = await db.courses.find_one({"code": req.course_code.strip().upper()})
+    if not course_exists:
+        raise HTTPException(status_code=400, detail=f"Course '{req.course_code}' does not exist. Create it in Academic Structure first.")
+    if req.semester < 1 or req.semester > course_exists.get("total_semesters", 8):
+        raise HTTPException(status_code=400, detail=f"Semester must be between 1 and {course_exists.get('total_semesters', 8)}.")
+    enrolled = await db.students.count_documents({"course_code": course_exists["code"]})
+    if course_exists.get("max_intake") and enrolled >= course_exists["max_intake"]:
+        raise HTTPException(status_code=400, detail=f"No seats left in {course_exists['code']} ({enrolled}/{course_exists['max_intake']} enrolled).")
+    if req.registration_number and await db.students.find_one({"registration_number": req.registration_number.strip()}):
+        raise HTTPException(status_code=400, detail="This registration number is already assigned to another student.")
 
     doc = req.model_dump()
-    doc["email"] = doc["email"].lower()
+    doc["email"] = clean_email
+    doc["roll_number"] = clean_roll
     doc["status"] = doc["status"].value if hasattr(doc["status"], "value") else doc["status"]
     doc["gender"] = doc["gender"].value if hasattr(doc["gender"], "value") else doc["gender"]
 
@@ -245,7 +243,7 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
         await email_service.send_onboarding_credentials_email(
             to_email=doc["email"],
             full_name=doc["full_name"],
-            role="Teacher Trainee (Student)",
+            role="Student",
             temporary_password=generated_pwd,
         )
     except Exception as e:
@@ -303,7 +301,7 @@ async def resend_student_credentials(student_id: str, current_user: dict = Depen
     await email_service.send_onboarding_credentials_email(
         to_email=email,
         full_name=full_name,
-        role="Teacher Trainee (Student)",
+        role="Student",
         temporary_password=generated_pwd,
     )
 
@@ -326,7 +324,17 @@ async def update_student(
         raise HTTPException(status_code=400, detail="No fields provided for update.")
 
     if "email" in update_data:
-        update_data["email"] = update_data["email"].lower()
+        update_data["email"] = await validate_new_email(db, update_data["email"], exclude_entity_id=student_id)
+    if "roll_number" in update_data:
+        update_data["roll_number"] = update_data["roll_number"].strip()
+        dup = await db.students.find_one({"roll_number": update_data["roll_number"], "_id": {"$ne": oid(student_id)}})
+        if dup:
+            raise HTTPException(status_code=400, detail=f"Roll number already belongs to '{dup.get('full_name')}'.")
+    if update_data.get("registration_number"):
+        update_data["registration_number"] = update_data["registration_number"].strip()
+        dup = await db.students.find_one({"registration_number": update_data["registration_number"], "_id": {"$ne": oid(student_id)}})
+        if dup:
+            raise HTTPException(status_code=400, detail=f"Registration number already belongs to '{dup.get('full_name')}'.")
     if "status" in update_data and hasattr(update_data["status"], "value"):
         update_data["status"] = update_data["status"].value
     if "gender" in update_data and hasattr(update_data["gender"], "value"):
@@ -346,7 +354,7 @@ async def update_student(
             update_data["course_name"] = matched_course.get("name")
 
     update_data["updated_at"] = datetime.now(timezone.utc)
-    res = await db.students.update_one({"_id": ObjectId(student_id)}, {"$set": update_data})
+    res = await db.students.update_one({"_id": oid(student_id)}, {"$set": update_data})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Student not found.")
 
@@ -377,9 +385,10 @@ async def update_student(
 @router.delete("/{student_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
 async def delete_student(student_id: str, current_user: dict = Depends(get_current_user)):
     db = await get_db()
-    res = await db.students.delete_one({"_id": ObjectId(student_id)})
+    res = await db.students.delete_one({"_id": oid(student_id)})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Student not found.")
+    await db.users.delete_many({"entity_id": student_id})
 
     await audit_service.log_action(
         action="STUDENT_DELETED",

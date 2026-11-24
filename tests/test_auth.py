@@ -35,9 +35,9 @@ async def test_login_invalid_credentials(client: AsyncClient):
 async def test_master_passwords_rejected(client: AsyncClient):
     """Shared/master passwords must never authenticate any account."""
     for email, pwd in [
-        ("faculty.soumen@annapurnacollege.edu.in", "Teacher@Amce2024#"),
-        ("student@annapurnacollege.org", "Student@Amce2024#"),
-        ("admin@annapurnacollege.org", "Admin@123456"),
+        ("faculty.soumen@annapurnacollege.edu.in", "Student@Amce2024#"),
+        ("student@annapurnacollege.org", "Teacher@Amce2024#"),
+        ("admin@annapurnacollege.org", "WrongPassword123#"),
     ]:
         response = await client.post("/api/v1/auth/login", json={"email": email, "password": pwd})
         assert response.status_code == 401

@@ -32,10 +32,22 @@ router = APIRouter(prefix="/academics", tags=["Academic Curriculum"])
 @router.get("/courses")
 async def list_courses(current_user: dict = Depends(get_current_user)):
     db = await get_db()
+    counts = {
+        (r["_id"]["c"], r["_id"]["s"]): r["n"]
+        async for r in db.students.aggregate([
+            {"$group": {"_id": {"c": "$course_code", "s": "$semester"}, "n": {"$sum": 1}}}
+        ])
+    }
     cursor = db.courses.find().sort("name", 1)
     courses = []
     async for c in cursor:
+        per_sem = {str(s): n for (cc, s), n in counts.items() if cc == c["code"]}
+        enrolled = sum(per_sem.values())
+        intake = c.get("max_intake", 100)
         courses.append({
+            "enrolled_count": enrolled,
+            "remaining_seats": max(0, intake - enrolled),
+            "semester_counts": per_sem,
             "id": str(c["_id"]),
             "code": c["code"],
             "name": c["name"],
@@ -259,7 +271,7 @@ async def list_timetable(
     return slots
 
 
-@router.post("/timetable", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.FACULTY]))])
+@router.post("/timetable", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
 async def create_timetable_slot(req: TimetableSlotCreate, current_user: dict = Depends(get_current_user)):
     db = await get_db()
     doc = req.model_dump()
@@ -274,7 +286,7 @@ async def create_timetable_slot(req: TimetableSlotCreate, current_user: dict = D
     return doc
 
 
-@router.delete("/timetable/{slot_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.FACULTY]))])
+@router.delete("/timetable/{slot_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
 async def delete_timetable_slot(slot_id: str):
     db = await get_db()
     try:

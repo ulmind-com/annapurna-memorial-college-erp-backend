@@ -28,6 +28,7 @@ from annapurna_memorial_college_erp_backend.routers import (
     seed,
     communication,
     app_settings,
+    master_data,
 )
 
 # Setup structured logging
@@ -113,6 +114,7 @@ app.include_router(audit.router, prefix=settings.API_V1_STR)
 app.include_router(seed.router, prefix=settings.API_V1_STR)
 app.include_router(communication.router, prefix=settings.API_V1_STR)
 app.include_router(app_settings.router, prefix=settings.API_V1_STR)
+app.include_router(master_data.router, prefix=settings.API_V1_STR)
 
 
 @app.get("/")

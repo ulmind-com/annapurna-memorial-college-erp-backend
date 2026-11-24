@@ -34,11 +34,9 @@ async def list_study_materials(
         st = await get_student_record(db, current_user, required=True)
         course_code, semester = st.get("course_code"), st.get("semester", 1)
         query["category"] = {"$ne": "LESSON_PLAN"}
-    elif is_faculty(current_user) and not course_code:
-        scope = await get_faculty_scope(db, current_user)
-        or_conds = classes_query(scope["classes"]).get("$or", [])
-        or_conds.append({"uploaded_by_id": current_user.get("id")})
-        query["$and"] = [{"$or": or_conds}]
+    elif is_faculty(current_user):
+        # Teachers manage only the notes/plans they uploaded themselves
+        query["uploaded_by_id"] = current_user.get("id")
     if category:
         query["category"] = category
     if course_code:
@@ -54,7 +52,7 @@ async def list_study_materials(
             {"tags": {"$regex": search, "$options": "i"}},
         ]
 
-    cursor = db.study_materials.find(query).skip((page - 1) * limit).limit(limit).sort("created_at", -1)
+    cursor = db.study_materials.find(query).sort([("material_date", -1), ("created_at", -1)]).skip((page - 1) * limit).limit(limit)
     materials = []
     async for m in cursor:
         materials.append({
@@ -69,6 +67,7 @@ async def list_study_materials(
             "file_size_bytes": m.get("file_size_bytes", 0),
             "tags": m.get("tags", []),
             "category": m.get("category", "NOTES"),
+            "material_date": m.get("material_date"),
             "uploaded_by_id": m.get("uploaded_by_id"),
             "uploaded_by_name": m.get("uploaded_by_name", "Faculty"),
             "downloads_count": m.get("downloads_count", 0),
@@ -86,6 +85,7 @@ async def upload_study_material(
     subject_code: str = Form(...),
     tags: str = Form(""),  # comma separated
     category: str = Form("NOTES"),  # NOTES, PDF, LESSON_PLAN, SYLLABUS
+    material_date: Optional[str] = Form(None),  # YYYY-MM-DD, the class day these notes belong to
     file: Optional[UploadFile] = File(None),
     current_user: dict = Depends(get_current_user),
 ):
@@ -121,6 +121,7 @@ async def upload_study_material(
         "file_size_bytes": file_size_bytes,
         "tags": [t.strip() for t in tags.split(",") if t.strip()],
         "category": (category or "NOTES").upper(),
+        "material_date": (material_date or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10],
         "uploaded_by_id": current_user["id"],
         "uploaded_by_name": current_user.get("name") or current_user.get("full_name") or "Faculty Member",
         "downloads_count": 0,
