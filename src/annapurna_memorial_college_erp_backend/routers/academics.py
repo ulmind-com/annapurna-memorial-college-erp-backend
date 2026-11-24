@@ -17,6 +17,7 @@ from annapurna_memorial_college_erp_backend.schemas.academic import (
     SubjectResponse,
     AcademicSessionCreate,
     AcademicSessionResponse,
+    TimetableSlotCreate,
 )
 
 router = APIRouter(prefix="/academics", tags=["Academic Curriculum"])
@@ -174,3 +175,84 @@ async def create_session(req: AcademicSessionCreate):
     res = await db.academic_sessions.insert_one(doc)
     doc.pop("_id", None)
     return {"id": str(res.inserted_id), **doc}
+
+
+# TIMETABLE
+@router.get("/timetable")
+async def list_timetable(
+    course_code: Optional[str] = None,
+    semester: Optional[int] = None,
+    day: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    db = await get_db()
+    query = {}
+
+    # If student, match their enrolled course/semester if not specified
+    if current_user.get("role") == UserRole.STUDENT and not course_code:
+        st = await db.students.find_one({
+            "$or": [
+                {"email": current_user.get("email")},
+                {"_id": ObjectId(current_user["id"]) if ObjectId.is_valid(current_user.get("id", "")) else None},
+            ]
+        })
+        if st:
+            course_code = st.get("course_code") or st.get("course")
+            if not semester:
+                semester = st.get("semester", 1)
+
+    if course_code:
+        query["course_code"] = course_code.upper()
+    if semester:
+        query["semester"] = int(semester)
+    if day:
+        query["day"] = day.upper()
+
+    cursor = db.timetable_slots.find(query).sort("time", 1)
+    slots = []
+    async for s in cursor:
+        slots.append({
+            "id": str(s["_id"]),
+            "day": s["day"],
+            "course_code": s["course_code"],
+            "semester": s["semester"],
+            "time": s["time"],
+            "subject": s["subject"],
+            "class_label": s.get("class_label") or f"{s['course_code']} Sem {s['semester']}",
+            "room": s.get("room", "Room 101"),
+            "faculty": s.get("faculty", "Faculty Member"),
+            "type": s.get("type", "Theory Lecture"),
+            "status": s.get("status", "Scheduled"),
+            "created_at": s.get("created_at"),
+        })
+    return slots
+
+
+@router.post("/timetable", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.FACULTY]))])
+async def create_timetable_slot(req: TimetableSlotCreate, current_user: dict = Depends(get_current_user)):
+    db = await get_db()
+    doc = req.model_dump()
+    doc["day"] = doc["day"].upper()
+    doc["course_code"] = doc["course_code"].upper()
+    doc["created_at"] = datetime.now(timezone.utc)
+    doc["created_by"] = current_user.get("id")
+
+    res = await db.timetable_slots.insert_one(doc)
+    doc["id"] = str(res.inserted_id)
+    doc.pop("_id", None)
+    return doc
+
+
+@router.delete("/timetable/{slot_id}", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.FACULTY]))])
+async def delete_timetable_slot(slot_id: str):
+    db = await get_db()
+    try:
+        query = {"_id": ObjectId(slot_id)}
+    except Exception:
+        query = {"id": slot_id}
+
+    res = await db.timetable_slots.delete_one(query)
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Timetable slot not found.")
+    return {"message": "Timetable slot deleted successfully."}
+

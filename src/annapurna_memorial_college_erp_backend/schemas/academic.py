@@ -85,3 +85,21 @@ class SubjectResponse(SubjectBase):
     faculty_name: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+
+class TimetableSlotBase(BaseModel):
+    day: str  # MON, TUE, WED, THU, FRI, SAT
+    course_code: str
+    semester: int
+    time: str
+    subject: str
+    class_label: Optional[str] = None
+    room: Optional[str] = "Room 101"
+    faculty: Optional[str] = "Faculty Member"
+    type: Optional[str] = "Theory Lecture"
+    status: Optional[str] = "Scheduled"
+
+
+class TimetableSlotCreate(TimetableSlotBase):
+    pass
+
