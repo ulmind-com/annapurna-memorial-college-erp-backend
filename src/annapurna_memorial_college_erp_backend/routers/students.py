@@ -166,6 +166,22 @@ async def create_student(req: StudentCreate, current_user: dict = Depends(get_cu
     doc["email"] = doc["email"].lower()
     doc["status"] = doc["status"].value if hasattr(doc["status"], "value") else doc["status"]
     doc["gender"] = doc["gender"].value if hasattr(doc["gender"], "value") else doc["gender"]
+
+    # Dynamically resolve course_name from db.courses
+    clean_code = req.course_code.strip()
+    norm_code = clean_code.replace(".", "").upper()
+    matched_course = await db.courses.find_one({
+        "$or": [
+            {"code": {"$regex": f"^{clean_code}$", "$options": "i"}},
+            {"code": {"$regex": f"^{norm_code}$", "$options": "i"}},
+        ]
+    })
+    if matched_course:
+        doc["course_code"] = matched_course.get("code", clean_code)
+        doc["course_name"] = matched_course.get("name", doc.get("course_name") or clean_code)
+    elif not doc.get("course_name"):
+        doc["course_name"] = clean_code
+
     if not doc.get("registration_number"):
         doc.pop("registration_number", None)
     if not doc.get("avatar_url"):
@@ -298,10 +314,34 @@ async def update_student(
     if "gender" in update_data and hasattr(update_data["gender"], "value"):
         update_data["gender"] = update_data["gender"].value
 
+    if update_data.get("course_code"):
+        clean_code = update_data["course_code"].strip()
+        norm_code = clean_code.replace(".", "").upper()
+        matched_course = await db.courses.find_one({
+            "$or": [
+                {"code": {"$regex": f"^{clean_code}$", "$options": "i"}},
+                {"code": {"$regex": f"^{norm_code}$", "$options": "i"}},
+            ]
+        })
+        if matched_course:
+            update_data["course_code"] = matched_course.get("code", clean_code)
+            update_data["course_name"] = matched_course.get("name")
+
     update_data["updated_at"] = datetime.now(timezone.utc)
     res = await db.students.update_one({"_id": ObjectId(student_id)}, {"$set": update_data})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Student not found.")
+
+    # Synchronize user account if full_name, email, or avatar_url changed
+    user_sync = {}
+    if "full_name" in update_data:
+        user_sync["full_name"] = update_data["full_name"]
+    if "email" in update_data:
+        user_sync["email"] = update_data["email"]
+    if "avatar_url" in update_data:
+        user_sync["avatar_url"] = update_data["avatar_url"]
+    if user_sync:
+        await db.users.update_many({"entity_id": student_id}, {"$set": user_sync})
 
     await audit_service.log_action(
         action="STUDENT_UPDATED",

@@ -116,7 +116,30 @@ async def list_all_marksheets(
 
     # If student is viewing, only allow their own published marksheets
     if current_user.get("role") == UserRole.STUDENT.value:
-        query["student_id"] = current_user.get("entity_id")
+        entity_id = current_user.get("entity_id")
+        user_email = current_user.get("email")
+        st_rec = None
+        if entity_id:
+            try:
+                st_rec = await db.students.find_one({"_id": ObjectId(entity_id)})
+            except Exception:
+                st_rec = await db.students.find_one({"_id": entity_id})
+        if not st_rec and user_email:
+            st_rec = await db.students.find_one({"email": user_email})
+
+        st_roll = st_rec.get("roll_number") if st_rec else None
+        st_id = str(st_rec["_id"]) if st_rec else entity_id
+
+        or_conds = []
+        if st_id:
+            or_conds.append({"student_id": st_id})
+        if st_roll:
+            or_conds.append({"roll_number": st_roll})
+
+        if or_conds:
+            query["$or"] = or_conds
+        else:
+            query["student_id"] = entity_id or "NONE"
         query["status"] = MarksheetStatus.PUBLISHED.value
 
     cursor = db.marksheets.find(query).skip((page - 1) * limit).limit(limit).sort("roll_number", 1)
@@ -248,7 +271,30 @@ async def list_exam_marksheets(
 
     # If student is viewing, only allow published marksheet for themself
     if current_user.get("role") == UserRole.STUDENT.value:
-        query["student_id"] = current_user.get("entity_id")
+        entity_id = current_user.get("entity_id")
+        user_email = current_user.get("email")
+        st_rec = None
+        if entity_id:
+            try:
+                st_rec = await db.students.find_one({"_id": ObjectId(entity_id)})
+            except Exception:
+                st_rec = await db.students.find_one({"_id": entity_id})
+        if not st_rec and user_email:
+            st_rec = await db.students.find_one({"email": user_email})
+
+        st_roll = st_rec.get("roll_number") if st_rec else None
+        st_id = str(st_rec["_id"]) if st_rec else entity_id
+
+        or_conds = []
+        if st_id:
+            or_conds.append({"student_id": st_id})
+        if st_roll:
+            or_conds.append({"roll_number": st_roll})
+
+        if or_conds:
+            query["$or"] = or_conds
+        else:
+            query["student_id"] = entity_id or "NONE"
         query["status"] = MarksheetStatus.PUBLISHED.value
 
     cursor = db.marksheets.find(query).sort("roll_number", 1)
@@ -508,4 +554,51 @@ async def public_verify_marksheet(qr_hash: str):
         "result_status": ms["result_status"],
         "status": ms["status"],
         "issued_date": ms.get("published_at") or ms.get("created_at"),
+    }
+
+
+@router.post("/publish-results", dependencies=[Depends(require_roles([UserRole.ADMIN, UserRole.SUPER_ADMIN]))])
+async def publish_course_results(
+    course_code: str = Query(..., description="Course code to publish"),
+    semester: int = Query(..., description="Semester to publish"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Publish all semester results and digital certificates for a given course & semester.
+    Makes marksheets instantly visible to all enrolled trainees.
+    """
+    db = await get_db()
+    now = datetime.now(timezone.utc)
+    clean_code = course_code.strip()
+    norm_code = clean_code.replace(".", "").upper()
+
+    res = await db.marksheets.update_many(
+        {
+            "$or": [
+                {"course_code": {"$regex": f"^{clean_code}$", "$options": "i"}},
+                {"course_code": {"$regex": f"^{norm_code}$", "$options": "i"}},
+            ],
+            "semester": semester,
+        },
+        {
+            "$set": {
+                "status": MarksheetStatus.PUBLISHED.value,
+                "published_at": now,
+                "certified_at": now,
+            }
+        }
+    )
+
+    await audit_service.log_action(
+        action="EXAMINATION_RESULTS_PUBLISHED",
+        entity_type="EXAMINATION",
+        user_id=current_user["id"],
+        user_email=current_user["email"],
+        user_role=current_user["role"],
+        details={"course_code": course_code, "semester": semester, "published_count": res.modified_count},
+    )
+
+    return {
+        "message": f"Results and certificates successfully published for {course_code} Semester {semester}.",
+        "modified_count": res.modified_count,
     }

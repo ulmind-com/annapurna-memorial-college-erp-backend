@@ -272,6 +272,17 @@ async def update_faculty(
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Faculty member not found.")
 
+    # Synchronize user account if full_name, email, or avatar_url changed
+    user_sync = {}
+    if "full_name" in update_data:
+        user_sync["full_name"] = update_data["full_name"]
+    if "email" in update_data:
+        user_sync["email"] = update_data["email"]
+    if "avatar_url" in update_data:
+        user_sync["avatar_url"] = update_data["avatar_url"]
+    if user_sync:
+        await db.users.update_many({"entity_id": faculty_id}, {"$set": user_sync})
+
     await audit_service.log_action(
         action="FACULTY_UPDATED",
         entity_type="FACULTY",
