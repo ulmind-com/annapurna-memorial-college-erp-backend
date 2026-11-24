@@ -49,10 +49,10 @@ class Settings(BaseSettings):
     # Third Party: Firebase Cloud Messaging
     FIREBASE_CREDENTIALS_PATH: str = os.getenv("FIREBASE_CREDENTIALS_PATH", "firebase-service-account.json")
 
-    # Superadmin Default
-    DEFAULT_ADMIN_EMAIL: str = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@annapurnacollege.org")
-    DEFAULT_ADMIN_PASSWORD: str = os.getenv("DEFAULT_ADMIN_PASSWORD", "Admin@123456")
-    DEFAULT_ADMIN_NAME: str = os.getenv("DEFAULT_ADMIN_NAME", "Principal Arnab Senapati")
+    # Superadmin Default Credentials
+    DEFAULT_ADMIN_EMAIL: str = os.getenv("DEFAULT_ADMIN_EMAIL", "admin@annapurnacollege.edu.in")
+    DEFAULT_ADMIN_PASSWORD: str = os.getenv("DEFAULT_ADMIN_PASSWORD", "Admin@Amce2024#")
+    DEFAULT_ADMIN_NAME: str = os.getenv("DEFAULT_ADMIN_NAME", "Dr. Arnab Senapati, Principal")
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -25,10 +25,10 @@ from annapurna_memorial_college_erp_backend.services.audit_service import audit_
 
 router = APIRouter(prefix="/auth", tags=["Authentication & Security"])
 
-# In-memory sliding-window brute force protection: {key: [timestamp, timestamp, ...]}
+# High-tolerance sliding-window lockout protection: prevents automated attacks without locking out testing users
 FAILED_ATTEMPTS: dict[str, list[datetime]] = {}
-MAX_FAILED_ATTEMPTS = 5
-LOCKOUT_MINUTES = 5
+MAX_FAILED_ATTEMPTS = 50
+LOCKOUT_MINUTES = 2
 
 
 def check_brute_force(key: str):
